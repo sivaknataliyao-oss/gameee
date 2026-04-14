@@ -7,6 +7,17 @@ build/
 venv/
 .env
 output/
+runs/
 *.db
 .vscode/
 .idea/
+
+# YouTube / Google credentials
+client_secret.json
+youtube_token.pickle
+*.pickle
+
+# Медиа артефакты
+*.mp4
+*.mp3
+*.wav

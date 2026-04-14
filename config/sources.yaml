@@ -1,26 +1,63 @@
+# === ИСТОЧНИКИ НОВОСТЕЙ (RSS) ===
 sources:
-  - name: "Habr"
-    url: "https://habr.com/ru/rss/articles/"
-    category: "tech"
+  - name: "BBC Politics"
+    url: "http://feeds.bbci.co.uk/news/politics/rss.xml"
+    category: "politics"
 
-  - name: "TechCrunch"
-    url: "https://techcrunch.com/feed/"
-    category: "tech"
+  - name: "Reuters World"
+    url: "https://www.reutersagency.com/feed/"
+    category: "politics"
 
-  - name: "BBC News"
-    url: "http://feeds.bbci.co.uk/news/rss.xml"
+  - name: "Al Jazeera"
+    url: "https://www.aljazeera.com/xml/rss/all.xml"
     category: "world"
 
+  - name: "The Guardian World"
+    url: "https://www.theguardian.com/world/rss"
+    category: "politics"
+
+  - name: "NPR Politics"
+    url: "https://feeds.npr.org/1014/rss.xml"
+    category: "politics"
+
+# === ФИЛЬТРАЦИЯ ===
 filters:
   keywords:
-    - "AI"
-    - "Python"
-    - "технологии"
-    - "разработка"
+    - "election"
+    - "president"
+    - "parliament"
+    - "congress"
+    - "sanctions"
+    - "diplomacy"
+    - "summit"
+    - "war"
+    - "treaty"
+    - "government"
+    - "minister"
+    - "policy"
 
+# === СОХРАНЕНИЕ ПРОМЕЖУТОЧНЫХ ДАННЫХ ===
 storage:
-  type: "json"  # json | sqlite
+  type: "json"
   path: "output/news.json"
 
+# === TTS ===
+tts:
+  voice: "en-US-Wavenet-D"  # Google Cloud WaveNet голос
+  language: "en-US"
+
+# === ИЗОБРАЖЕНИЯ ===
+# Получи бесплатный ключ: https://www.pexels.com/api/
+pexels:
+  api_key: ""  # или задай через env: PEXELS_API_KEY
+
+# === YOUTUBE ===
+youtube:
+  credentials: "client_secret.json"   # OAuth credentials от Google Cloud
+  token: "youtube_token.pickle"       # автосохранённый токен
+  privacy: "public"                   # public | unlisted | private
+
+# === РАСПИСАНИЕ ===
 schedule:
-  interval_minutes: 60
+  cron: "0 7 * * *"  # каждый день в 7:00 UTC
+  timezone: "UTC"
