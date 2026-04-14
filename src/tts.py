@@ -63,6 +63,10 @@ def synthesize_google_cloud(text: str, output_path: str, voice: str = "en-US-Wav
         print("[TTS] ⚠ google-cloud-texttospeech не установлен")
         print("[TTS] Используется fallback: edge-tts")
         return synthesize_edge_tts(text, output_path)
+    except Exception as e:
+        print(f"[TTS] ⚠ Google Cloud TTS ошибка: {e}")
+        print("[TTS] Используется fallback: edge-tts")
+        return synthesize_edge_tts(text, output_path)
 
 
 def synthesize_edge_tts(text: str, output_path: str,

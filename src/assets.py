@@ -69,7 +69,7 @@ def collect_visuals(script: dict, run_dir: str, api_key: str | None = None) -> l
 
             if images:
                 ext = "jpg"
-                filename = f"s{i:02d}_v{j:02d}_{ext}"
+                filename = f"s{i:02d}_v{j:02d}.{ext}"
                 save_path = os.path.join(assets_dir, filename)
                 result = download_image(images[0]["url"], save_path)
                 if result:

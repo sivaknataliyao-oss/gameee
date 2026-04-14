@@ -15,13 +15,19 @@ from pathlib import Path
 
 def get_audio_duration(audio_path: str) -> float:
     """Получает длительность аудио через ffprobe."""
-    result = subprocess.run(
-        ["ffprobe", "-v", "quiet", "-print_format", "json",
-         "-show_format", audio_path],
-        capture_output=True, text=True,
-    )
-    data = json.loads(result.stdout)
-    return float(data["format"]["duration"])
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-print_format", "json",
+             "-show_format", audio_path],
+            capture_output=True, text=True,
+        )
+        data = json.loads(result.stdout)
+        return float(data["format"]["duration"])
+    except (json.JSONDecodeError, KeyError, FileNotFoundError) as e:
+        raise RuntimeError(
+            f"Не удалось определить длительность аудио '{audio_path}'. "
+            f"Убедись, что ffprobe установлен (apt install ffmpeg): {e}"
+        )
 
 
 def render_video(
@@ -109,7 +115,7 @@ def render_video(
         *inputs,
         "-i", audio_path,
         "-filter_complex", filter_complex,
-        "-map", f"{overlay.strip('[]')}",
+        "-map", overlay,
         "-map", f"{n_images}:a",
         "-c:v", "libx264", "-preset", "medium", "-crf", "23",
         "-c:a", "aac", "-b:a", "192k",

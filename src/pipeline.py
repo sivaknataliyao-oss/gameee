@@ -201,9 +201,29 @@ def step_upload(script: dict, video_path: str, thumb_path: str,
     return result
 
 
+def _find_latest_run() -> str | None:
+    """Находит последний run-каталог с артефактами."""
+    runs_dir = Path("runs")
+    if not runs_dir.exists():
+        return None
+    # Ищем самый свежий run с script.json
+    candidates = sorted(runs_dir.glob("*/run_*"), reverse=True)
+    for d in candidates:
+        if (d / "script.json").exists():
+            return str(d)
+    return None
+
+
 def run(config_path: str | None = None, step: str | None = None,
         dry_run: bool = False) -> None:
-    """Запускает полный пайплайн или отдельный шаг."""
+    """Запускает полный пайплайн или отдельный шаг.
+
+    --step fetch   : только сбор новостей
+    --step script  : fetch + select + script
+    --step render  : всё до рендера (включая рендер)
+    --step upload  : только загрузка (из последнего прогона)
+    без --step     : полный пайплайн
+    """
     path = config_path or str(DEFAULT_CONFIG)
     config = load_config(path)
 
@@ -212,13 +232,28 @@ def run(config_path: str | None = None, step: str | None = None,
     print("║   новость → сценарий → видео → YT    ║")
     print("╚══════════════════════════════════════╝")
 
+    # Если --step upload — берём данные из последнего прогона
+    if step == "upload":
+        last_run = _find_latest_run()
+        if not last_run:
+            raise RuntimeError("Нет предыдущего прогона для загрузки. Запусти полный пайплайн.")
+
+        print(f"\nЗагрузка из прогона: {last_run}")
+        script_path = os.path.join(last_run, "script.json")
+        video_path = os.path.join(last_run, "video.mp4")
+        thumb_path = os.path.join(last_run, "thumbnail.jpg")
+
+        if not os.path.exists(video_path):
+            raise RuntimeError(f"Видео не найдено: {video_path}")
+
+        with open(script_path, encoding="utf-8") as f:
+            script = json.load(f)
+
+        step_upload(script, video_path, thumb_path, config, dry_run)
+        return
+
     run_dir = create_run_dir()
     print(f"\nРабочая папка: {run_dir}")
-
-    # Полный пайплайн или отдельные шаги
-    if step and step != "fetch":
-        # Для отдельных шагов загружаем промежуточные данные
-        print(f"Режим: только шаг '{step}'")
 
     # 1. Fetch
     articles = step_fetch(config)
