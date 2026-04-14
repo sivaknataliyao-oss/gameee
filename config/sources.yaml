@@ -1,0 +1,26 @@
+sources:
+  - name: "Habr"
+    url: "https://habr.com/ru/rss/articles/"
+    category: "tech"
+
+  - name: "TechCrunch"
+    url: "https://techcrunch.com/feed/"
+    category: "tech"
+
+  - name: "BBC News"
+    url: "http://feeds.bbci.co.uk/news/rss.xml"
+    category: "world"
+
+filters:
+  keywords:
+    - "AI"
+    - "Python"
+    - "технологии"
+    - "разработка"
+
+storage:
+  type: "json"  # json | sqlite
+  path: "output/news.json"
+
+schedule:
+  interval_minutes: 60
