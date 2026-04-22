@@ -12,7 +12,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from src.core import config
+from src.core import config, costs
 from src.core.models import LengthProfile, Source, Story
 from src.core.storage import (
     StoryRow,
@@ -23,6 +23,7 @@ from src.core.storage import (
     upsert_story,
 )
 from src.pipeline import RunOptions, process_one
+from src.publish import scheduler
 from src.rights.manager import ensure_asked, is_cleared, record_response
 from src.sources.registry import all_adapters, by_name
 
@@ -215,6 +216,86 @@ def _row_to_story(row: StoryRow) -> Story:
         growth_score=row.growth_score,
         long_form_potential=row.long_form_potential,
     )
+
+
+@app.command("costs")
+def costs_cmd() -> None:
+    """Show API cost summary for the current month."""
+    _setup_logging()
+    data = costs.summary()
+    if not data:
+        console.print("[dim]no cost records this month[/dim]")
+        return
+    table = Table(title=f"API costs — {datetime.now(timezone.utc).strftime('%Y-%m')}")
+    table.add_column("provider")
+    table.add_column("USD", justify="right")
+    for k, v in sorted(data.items(), key=lambda kv: -kv[1]):
+        table.add_row(k, f"${v:.4f}")
+    table.add_row("[bold]total[/bold]", f"[bold]${sum(data.values()):.4f}[/bold]")
+    console.print(table)
+
+
+@app.command("schedule")
+def schedule_cmd() -> None:
+    """Show pending scheduled posts per platform."""
+    _setup_logging()
+    pending = scheduler.pending_summary()
+    if not pending:
+        console.print("[dim]no pending posts[/dim]")
+        return
+    table = Table(title="Scheduled posts (planned)")
+    table.add_column("platform")
+    table.add_column("count", justify="right")
+    for k, v in pending.items():
+        table.add_row(k, str(v))
+    console.print(table)
+
+
+@app.command("dispatch")
+def dispatch_cmd(
+    dry_run: bool = typer.Option(False, help="show what would be published, don't upload"),
+    limit: int = 5,
+) -> None:
+    """Upload any scheduled posts whose time has come."""
+    import json as _json
+    from src.publish import instagram as ig_pub  # noqa: F401 (used when wired)
+    from src.publish import tiktok as tt_pub
+    from src.publish import youtube as yt_pub
+    from src.publish.package import Package
+
+    _setup_logging()
+    due = scheduler.due_posts()[:limit]
+    if not due:
+        console.print("[dim]nothing due yet[/dim]")
+        return
+
+    for row in due:
+        pkg = Package(
+            platform=row.platform,
+            video_path=Path(row.video_path),
+            title=row.title,
+            description=row.description,
+            hashtags=_json.loads(row.hashtags_json or "[]"),
+        )
+        console.print(f"[yellow]→[/yellow] {row.platform}: {row.title[:60]} "
+                      f"(planned {row.planned_for.isoformat()})")
+        if dry_run:
+            continue
+        try:
+            if row.platform in ("youtube", "youtube_shorts"):
+                vid = yt_pub.upload(pkg)
+                scheduler.mark_uploaded(row.id, True)
+                console.print(f"  [green]youtube[/green] {vid}")
+            elif row.platform == "tiktok":
+                tt_pub.export(pkg, Path(row.video_path).parent / f"tiktok_manual_{row.id}")
+                scheduler.mark_uploaded(row.id, True)
+                console.print(f"  [green]tiktok package ready for manual upload[/green]")
+            elif row.platform == "instagram":
+                scheduler.mark_uploaded(row.id, False, "needs public URL, skipped")
+                console.print(f"  [yellow]instagram needs public URL, skipped[/yellow]")
+        except Exception as exc:
+            scheduler.mark_uploaded(row.id, False, str(exc))
+            console.print(f"  [red]{type(exc).__name__}: {exc}[/red]")
 
 
 if __name__ == "__main__":

@@ -47,6 +47,11 @@ def channel() -> dict[str, Any]:
     return _read_yaml("channel.yaml")
 
 
+@lru_cache
+def audio() -> dict[str, Any]:
+    return _read_yaml("audio.yaml")
+
+
 def env(key: str, default: str | None = None) -> str | None:
     return os.getenv(key, default)
 

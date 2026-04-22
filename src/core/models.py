@@ -66,6 +66,14 @@ class Story(BaseModel):
     long_form_potential: float = 0.0
 
 
+class Scene(BaseModel):
+    """A visually coherent group: one key image + several variations on it."""
+
+    label: str                   # human-readable, e.g. "night-desk-diary"
+    prompts: list[str]           # 3–5 related prompts (same subject, varied angle/light)
+    chapter_index: int = 0       # which chapter this scene belongs to (0 = intro)
+
+
 class ProcessedStory(BaseModel):
     """Output of src/script/llm.py — everything needed for rendering."""
 
@@ -77,7 +85,8 @@ class ProcessedStory(BaseModel):
     script_with_markers: str     # contains [HOOK]/[CHAPTER_N]/[CLIFFHANGER_N]/[OUTRO]
     chapters: list["Chapter"]
     keywords: list[str]
-    image_prompts: list[str]
+    scenes: list[Scene] = []     # preferred over flat image_prompts
+    image_prompts: list[str]     # kept for backward compat / fallback
     tone: str = "neutral"
     estimated_minutes: float = 0.0
     profile: LengthProfile = LengthProfile.SHORT

@@ -9,6 +9,8 @@ router:
     - imagefx_playwright  # last-resort UI scrape
     - local_flux        # if local GPU available
   per_story_budget_usd: 0.10
+  # hard monthly cap across paid image providers; 0 = disabled
+  per_month_cap_usd: 15.0
 
 style:
   prefix: "cinematic, moody, warm tones, film grain, 35mm, dramatic lighting"

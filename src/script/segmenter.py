@@ -9,7 +9,7 @@ from src.core.models import ProcessedStory
 @dataclass
 class Segment:
     kind: str       # hook | chapter | cliffhanger | outro
-    index: int
+    index: int      # chapter number the segment belongs to (0 for hook/outro)
     text: str
 
 
@@ -21,7 +21,6 @@ def segments(story: ProcessedStory) -> list[Segment]:
         out.append(Segment("chapter", ch.index, ch.body))
         if ch.cliffhanger:
             out.append(Segment("cliffhanger", ch.index, ch.cliffhanger))
-    # OUTRO marker may be inside script_with_markers after last chapter
     tail = story.script_with_markers.split("[OUTRO]", 1)
     if len(tail) == 2:
         outro = tail[1].strip()

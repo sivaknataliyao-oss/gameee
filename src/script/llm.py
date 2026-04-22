@@ -20,11 +20,18 @@ import logging
 import re
 from typing import Any
 
-from src.core import config
-from src.core.models import Chapter, LengthProfile, ProcessedStory, Story
+from src.core import config, costs
+from src.core.models import Chapter, LengthProfile, ProcessedStory, Scene, Story
+from src.core.resilience import CircuitBreaker, retry
 from src.script.normalizer import normalize
 
 log = logging.getLogger(__name__)
+
+_breaker = CircuitBreaker("gemini", threshold=5, cooldown_sec=600)
+# Gemini 2.5 Flash approx: $0.30/1M input + $2.50/1M output tokens.
+# We track only an estimate — real billing comes from Google Console.
+_IN_PER_1M = 0.30
+_OUT_PER_1M = 2.50
 
 
 SYSTEM = """Ты — редактор русскоязычного сторителлинг-канала. Работаешь с историями из
@@ -41,8 +48,13 @@ Reddit/Twitter/Threads. Задача — подготовить сценарий
    [OUTRO] — короткое завершение + CTA «Подпишись, чтобы не пропустить».
 4. 3 варианта заголовка до 60 знаков в стиле «цепляющий русский YouTube»:
    «Он сделал X — и тут началось…», «Вы не поверите, что было дальше», и т.п.
-5. `image_prompts` — англоязычные промпты для Stable Diffusion / Imagen /
-   Pexels. 6–10 шт., атмосферные, без людей в фокусе, в кино-стиле.
+5. `scenes` — список визуально связных сцен (одна сцена на главу + сцена для
+   HOOK). В каждой сцене 3-4 промпта на английском: один и тот же сюжетный
+   объект/локация под разными углами/светом. Атмосферные, без людей в фокусе,
+   в кино-стиле (moody, film grain, 35mm, warm tones).
+   `label` — короткий идентификатор сцены (kebab-case).
+   `chapter_index` — номер главы (0 для HOOK/OUTRO).
+6. `image_prompts` — плоский список всех промптов из scenes, для обратной совместимости.
 """
 
 
@@ -56,6 +68,23 @@ SCHEMA = {
         "cleaned_text": {"type": "string"},
         "script_with_markers": {"type": "string"},
         "keywords": {"type": "array", "items": {"type": "string"}},
+        "scenes": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "label": {"type": "string"},
+                    "chapter_index": {"type": "integer"},
+                    "prompts": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 2,
+                        "maxItems": 5,
+                    },
+                },
+                "required": ["label", "prompts"],
+            },
+        },
         "image_prompts": {"type": "array", "items": {"type": "string"}},
         "tone": {
             "type": "string",
@@ -65,7 +94,7 @@ SCHEMA = {
     },
     "required": [
         "title_variants", "selected_title", "hook",
-        "script_with_markers", "keywords", "image_prompts",
+        "script_with_markers", "keywords", "scenes", "image_prompts",
     ],
 }
 
@@ -128,6 +157,18 @@ def _fallback_process(story: Story, profile: LengthProfile) -> ProcessedStory:
         script_with_markers=script,
         chapters=_parse_chapters(script),
         keywords=[story.title.split()[0] if story.title else "story"],
+        scenes=[
+            Scene(label="moody-interior", chapter_index=1, prompts=[
+                "cinematic moody room at night, warm light, film grain",
+                "moody interior, curtains, silhouette of a person by a window",
+                "dim room, desk lamp, papers scattered, 35mm",
+            ]),
+            Scene(label="diary-on-desk", chapter_index=2, prompts=[
+                "old diary on a wooden table, candle light, cinematic",
+                "close-up of handwritten journal pages, sepia, candlelight",
+                "vintage pen on an open notebook, warm dramatic light",
+            ]),
+        ],
         image_prompts=[
             "cinematic moody room at night, warm light, film grain",
             "silhouette of a person by a window, dramatic mood",
@@ -161,8 +202,10 @@ def process(story: Story, profile: LengthProfile = LengthProfile.SHORT) -> Proce
         profile=profile.value,
     )
 
-    try:
-        resp = client.models.generate_content(
+    @_breaker
+    @retry(attempts=3, initial=2.0, factor=2.0)
+    def _gen():
+        return client.models.generate_content(
             model="gemini-2.5-flash",
             contents=user,
             config=types.GenerateContentConfig(
@@ -173,13 +216,38 @@ def process(story: Story, profile: LengthProfile = LengthProfile.SHORT) -> Proce
                 max_output_tokens=8192,
             ),
         )
+
+    try:
+        resp = _gen()
         raw = resp.text or ""
         data: dict[str, Any] = json.loads(raw)
     except Exception as exc:
         log.warning("gemini call failed (%s) — falling back to rules", exc)
         return _fallback_process(story, profile)
 
+    # Track approximate cost from usage_metadata when available.
+    try:
+        usage = getattr(resp, "usage_metadata", None)
+        if usage:
+            costs.track("gemini", "in_tokens",
+                        float(usage.prompt_token_count or 0), _IN_PER_1M / 1_000_000,
+                        {"model": "gemini-2.5-flash"})
+            costs.track("gemini", "out_tokens",
+                        float(usage.candidates_token_count or 0), _OUT_PER_1M / 1_000_000,
+                        {"model": "gemini-2.5-flash"})
+    except Exception:
+        pass
+
     script = normalize(data["script_with_markers"])
+    scenes = [
+        Scene(
+            label=s.get("label", f"scene_{i}"),
+            chapter_index=int(s.get("chapter_index", 0) or 0),
+            prompts=list(s.get("prompts", [])),
+        )
+        for i, s in enumerate(data.get("scenes", []) or [])
+    ]
+    flat_prompts = data.get("image_prompts") or [p for s in scenes for p in s.prompts]
     return ProcessedStory(
         story_id=story.id,
         title_variants=data["title_variants"],
@@ -189,7 +257,8 @@ def process(story: Story, profile: LengthProfile = LengthProfile.SHORT) -> Proce
         script_with_markers=script,
         chapters=_parse_chapters(script),
         keywords=data.get("keywords", []),
-        image_prompts=data.get("image_prompts", []),
+        scenes=scenes,
+        image_prompts=flat_prompts,
         tone=data.get("tone", "neutral"),
         estimated_minutes=float(data.get("estimated_minutes", 0) or 0),
         profile=profile,

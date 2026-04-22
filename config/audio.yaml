@@ -1,0 +1,24 @@
+# Background music + SFX. Files are YOUR responsibility (license!).
+# Drop .mp3 or .wav files into assets/music/ and assets/sfx/.
+
+music:
+  enabled: true
+  dir: assets/music
+  # side-chain ducking: music is -N dB below voice, compresses when voice plays
+  voice_target_db: 0       # we keep voice at its mastered LUFS
+  music_base_db: -22       # music floor
+  duck_ratio: 8
+  duck_threshold_db: -30
+  duck_attack_ms: 5
+  duck_release_ms: 350
+  # If no music files found, skip silently (don't error)
+  fade_in_sec: 2.0
+  fade_out_sec: 3.0
+
+sfx:
+  enabled: true
+  dir: assets/sfx
+  cliffhanger_pattern: "whoosh*"  # glob: whoosh.wav, whoosh_1.wav, ...
+  boom_pattern: "boom*"           # heavier hit for shocks
+  volume_db: -12
+  offset_before_ms: 300           # play right before the cliffhanger line

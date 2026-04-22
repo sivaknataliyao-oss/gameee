@@ -18,13 +18,24 @@ CTA на твой канал.
 6. **Images** — цепочка провайдеров: `pexels → flux_replicate → openai_images →
    chatgpt_playwright → imagefx_playwright → local_flux`. Первый, кто вернул
    результат — выигрывает. Кеш в `.data/img_cache`.
-7. **Video** — ffmpeg-рендер слайдшоу с Ken-Burns + накладка «печатной
+7. **Audio post** — LUFS-мастеринг голоса, SFX-акценты на `[CLIFFHANGER_N]`,
+   амбиентная музыка с **sidechain ducking** (голос автоматически «проваливает»
+   музыку во время речи).
+8. **Video** — ffmpeg-рендер слайдшоу с Ken-Burns + накладка «печатной
    машинки» (PNG sequence с прозрачностью) + watermark канала. Длинное 16:9
    и вертикальное 9:16 с размытым фоном.
-8. **Clipper** — нарезает 9:16 видео по главам, добавляет CTA-баннер и end-card
-   «Полная история на канале @handle».
-9. **Publish** — YouTube Data API (upload + schedule), Instagram Reels (Graph
-   API), TikTok — «пакет под ручную загрузку».
+9. **Thumbnail** — авто-генерация 1280×720 из самой «драматичной» AI-картинки
+   + крупный заголовок с контуром + цветной акцент-бар.
+10. **Clipper** — нарезает 9:16 видео по **реальным границам глав** (не
+    равномерно), добавляет CTA-баннер и end-card «Полная история на канале @handle».
+11. **Scheduler** — раскидывает публикации во времени (длинное YT — раз в
+    неделю, Shorts/TikTok — раз в день), а не шлёпает 6 шортсов залпом.
+12. **Publish** — YouTube Data API (upload + schedule), Instagram Reels (Graph
+    API), TikTok — «пакет под ручную загрузку».
+13. **Cost tracker** — каждый платный API-вызов логируется в `.data/costs.jsonl`,
+    провайдеры сами отключаются, если месячный cap превышен.
+14. **Resilience** — retry + circuit breaker на все сетевые вызовы; хрупкие
+    Playwright-провайдеры блокируются на час после 3 подряд фейлов.
 
 ## Установка
 
@@ -103,7 +114,39 @@ python -m src.cli run --research
 
 # вечный цикл: скан + рендер
 python -m src.cli loop --interval-sec 180 --max-renders 3
+
+# бюджет: сколько потратили за этот месяц (по провайдерам)
+python -m src.cli costs
+
+# очередь запланированных публикаций
+python -m src.cli schedule
+
+# опубликовать то, у чего уже наступил `planned_for`
+python -m src.cli dispatch --limit 5
+python -m src.cli dispatch --dry-run
 ```
+
+## Музыка / SFX
+
+Pipeline автоматически подмешивает амбиентную музыку с side-chain ducking
+и воспроизводит SFX (`whoosh`/`boom`) перед `[CLIFFHANGER_N]`. Файлы не
+коммитятся в репо — добавь свои:
+
+```
+assets/music/ambient_01.mp3     # любой подходящий трек с правильной лицензией
+assets/sfx/whoosh.wav
+assets/sfx/boom.wav
+```
+
+Если папки пустые — мешаем без музыки, это нормально для MVP.
+
+## Cost cap
+
+`config/images.yaml` -> `router.per_month_cap_usd` — жёсткий месячный лимит.
+Превышение → платные провайдеры изображений автоматически пропускаются,
+pipeline падает на Pexels/локальные альтернативы.
+
+Посмотреть что потрачено: `python -m src.cli costs`.
 
 ## Структура
 
