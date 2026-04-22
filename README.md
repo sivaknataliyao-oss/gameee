@@ -11,7 +11,7 @@ CTA на твой канал.
 2. **Filter** — язык (ru/en), NSFW, длина, PII-редакция, дедуп.
 3. **Rights** — permission-first шлюз: без согласия автора в продакшн не идёт
    (есть `--research` режим для внутренних прогонов).
-4. **Script** — Claude генерирует: перевод EN→RU, цепляющий заголовок, маркеры
+4. **Script** — Gemini 2.5 Flash генерирует: перевод EN→RU, цепляющий заголовок, маркеры
    `[HOOK]/[CHAPTER_N]/[CLIFFHANGER_N]/[OUTRO]`, ключевые слова + промпты для картинок.
 5. **TTS** — Google **Chirp 3 HD** (русский) как основной, Silero v5 локально как
    fallback, OpenAI `gpt-4o-mini-tts` и Edge TTS — в резервной цепочке. Кеш в `.data/tts_cache`.
@@ -51,7 +51,7 @@ brew install ffmpeg
 | Twitter | Залогиниться через `twscrape add_accounts …` (файл БД в `TWSCRAPE_DB`) |
 | Threads | `python -m src.images.setup_auth --provider threads` |
 | Google Chirp 3 HD | Service Account JSON в `secrets/gcp-sa.json`, `Text-to-Speech API` включен |
-| Claude | `ANTHROPIC_API_KEY` |
+| Gemini (редактор + перевод + заголовки) | `GEMINI_API_KEY` (получить на https://aistudio.google.com/apikey — есть бесплатный тир) |
 | OpenAI (TTS/images) | `OPENAI_API_KEY` |
 | Replicate (Flux) | `REPLICATE_API_TOKEN` |
 | Pexels | `PEXELS_API_KEY` |

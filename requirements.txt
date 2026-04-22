@@ -22,7 +22,7 @@ rich>=13.9
 lingua-language-detector>=2.0
 
 # === LLM (titles, translate, markers, image prompts) ===
-anthropic>=0.40
+google-genai>=1.0
 openai>=1.55
 
 # === TTS ===

@@ -1,14 +1,17 @@
-"""LLM-driven script preparation.
+"""LLM-driven script preparation via Gemini.
 
-One Claude call produces everything downstream needs:
+One call to Gemini 2.5 Flash produces everything downstream needs:
   - Russian translation (if source is EN)
   - 3 catchy title variants
-  - hook (1-3s opener)
+  - hook (1–3s opener)
   - cleaned script with [HOOK]/[CHAPTER_N]/[CLIFFHANGER_N]/[OUTRO] markers
   - keywords for image search
   - image prompts for AI-generated slides
   - emotional tone
   - estimated minutes
+
+Gemini's `response_mime_type="application/json"` gives us strict JSON with no
+markdown fencing to strip — simpler and more reliable than regex extraction.
 """
 from __future__ import annotations
 
@@ -29,14 +32,42 @@ Reddit/Twitter/Threads. Задача — подготовить сценарий
 
 Требования:
 1. Если текст на английском — переведи на русский, сохраняя интонацию и эмоции.
-2. Очисти от мусора: эмодзи, ссылки, спам, перс. данные (имена, телефоны, адреса — заменяй на «[имя]», «[город]» и т.п.).
+   Не калькируй буквально: используй живой разговорный русский.
+2. Очисти от мусора: эмодзи, ссылки, спам, перс. данные (имена → «[имя]»,
+   адреса → «[город]», телефоны → «[номер]» и т.п.).
 3. Расставь маркеры:
    [HOOK] — 1–3 секунды в начале, цепляющая фраза (вопрос или шок-факт).
-   [CHAPTER_N] ... [CLIFFHANGER_N] — логические части истории. Минимум 3 пары.
+   [CHAPTER_N] ... [CLIFFHANGER_N] — логические части. Минимум 3 пары.
    [OUTRO] — короткое завершение + CTA «Подпишись, чтобы не пропустить».
-4. Сформулируй 3 варианта заголовка до 60 знаков, в стиле «цепляющий русский YouTube».
-5. Верни строгий JSON по схеме (никаких комментариев за пределами JSON).
+4. 3 варианта заголовка до 60 знаков в стиле «цепляющий русский YouTube»:
+   «Он сделал X — и тут началось…», «Вы не поверите, что было дальше», и т.п.
+5. `image_prompts` — англоязычные промпты для Stable Diffusion / Imagen /
+   Pexels. 6–10 шт., атмосферные, без людей в фокусе, в кино-стиле.
 """
+
+
+SCHEMA = {
+    "type": "object",
+    "properties": {
+        "translated": {"type": "boolean"},
+        "title_variants": {"type": "array", "items": {"type": "string"}, "minItems": 3, "maxItems": 3},
+        "selected_title": {"type": "string"},
+        "hook": {"type": "string"},
+        "cleaned_text": {"type": "string"},
+        "script_with_markers": {"type": "string"},
+        "keywords": {"type": "array", "items": {"type": "string"}},
+        "image_prompts": {"type": "array", "items": {"type": "string"}},
+        "tone": {
+            "type": "string",
+            "enum": ["neutral", "suspense", "funny", "shocking", "heartwarming"],
+        },
+        "estimated_minutes": {"type": "number"},
+    },
+    "required": [
+        "title_variants", "selected_title", "hook",
+        "script_with_markers", "keywords", "image_prompts",
+    ],
+}
 
 
 USER_TMPL = """Source language: {lang}
@@ -48,47 +79,31 @@ Text:
 {text}
 >>>
 
-Target profile: {profile} (short=5-10 min, long=15-25 min)
+Target profile: {profile} (short = 5–10 min, long = 15–25 min)
 
-Верни JSON по схеме:
-{{
-  "translated": <bool>,
-  "title_variants": ["...", "...", "..."],
-  "selected_title": "...",
-  "hook": "...",
-  "script_with_markers": "[HOOK] ... [CHAPTER_1] ... [CLIFFHANGER_1] ... [OUTRO] ...",
-  "keywords": ["..."],
-  "image_prompts": ["...", "..."],
-  "tone": "neutral|suspense|funny|shocking|heartwarming",
-  "estimated_minutes": 0.0
-}}"""
+Верни JSON по указанной схеме."""
 
 
 def _parse_chapters(script: str) -> list[Chapter]:
     """Extract (hook, body, cliffhanger) triples from marker-annotated script."""
     chapters: list[Chapter] = []
-    # pattern: [CHAPTER_N] ... [CLIFFHANGER_N] (optional; absorbs everything until next [CHAPTER_] or [OUTRO])
     pat = re.compile(
-        r"\[CHAPTER_(\d+)\](?P<body>.*?)(?:\[CLIFFHANGER_\1\](?P<cliff>.*?))?(?=\[CHAPTER_\d+\]|\[OUTRO\]|\Z)",
+        r"\[CHAPTER_(\d+)\](?P<body>.*?)(?:\[CLIFFHANGER_\1\](?P<cliff>.*?))?"
+        r"(?=\[CHAPTER_\d+\]|\[OUTRO\]|\Z)",
         re.DOTALL,
     )
     for m in pat.finditer(script):
         idx = int(m.group(1))
         body = (m.group("body") or "").strip()
         cliff = (m.group("cliff") or "").strip()
-        # first sentence is hook
         hook = re.split(r"(?<=[.!?])\s+", body, maxsplit=1)[0] if body else ""
         chapters.append(Chapter(index=idx, hook=hook, body=body, cliffhanger=cliff))
     return chapters
 
 
 def _fallback_process(story: Story, profile: LengthProfile) -> ProcessedStory:
-    """If no LLM available, produce a minimal ProcessedStory using rules.
-
-    Not great, but lets the rest of the pipeline run for testing without API keys.
-    """
+    """Rule-based path when no API key is available; keeps pipeline runnable."""
     cleaned = normalize(story.text or story.title)
-    # Naively split into 3 chapters
     parts = re.split(r"(?<=[.!?])\s+", cleaned)
     third = max(1, len(parts) // 3)
     ch1 = " ".join(parts[:third])
@@ -106,7 +121,7 @@ def _fallback_process(story: Story, profile: LengthProfile) -> ProcessedStory:
     )
     return ProcessedStory(
         story_id=story.id,
-        title_variants=[title, title + " (продолжение внутри)", "Такое случается нечасто"],
+        title_variants=[title, title + " (что было дальше)", "Такое случается нечасто"],
         selected_title=title,
         hook=hook,
         cleaned_text=cleaned,
@@ -125,34 +140,44 @@ def _fallback_process(story: Story, profile: LengthProfile) -> ProcessedStory:
 
 
 def process(story: Story, profile: LengthProfile = LengthProfile.SHORT) -> ProcessedStory:
-    key = config.env("ANTHROPIC_API_KEY")
+    key = config.env("GEMINI_API_KEY")
     if not key:
-        log.warning("ANTHROPIC_API_KEY missing — using rule-based fallback")
+        log.warning("GEMINI_API_KEY missing — using rule-based fallback")
         return _fallback_process(story, profile)
 
     try:
-        import anthropic
+        from google import genai
+        from google.genai import types
     except ImportError:  # pragma: no cover
+        log.warning("google-genai not installed — using rule-based fallback")
         return _fallback_process(story, profile)
 
-    client = anthropic.Anthropic(api_key=key)
-    prompt = USER_TMPL.format(
+    client = genai.Client(api_key=key)
+    user = USER_TMPL.format(
         lang=story.lang_detected.value,
         source=story.source.value,
         title=story.title,
         text=story.text or story.title,
         profile=profile.value,
     )
-    resp = client.messages.create(
-        model="claude-haiku-4-5",
-        max_tokens=4096,
-        system=SYSTEM,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    raw = "".join(
-        block.text for block in resp.content if getattr(block, "type", "") == "text"
-    )
-    data = _extract_json(raw)
+
+    try:
+        resp = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=user,
+            config=types.GenerateContentConfig(
+                system_instruction=SYSTEM,
+                response_mime_type="application/json",
+                response_schema=SCHEMA,
+                temperature=0.8,
+                max_output_tokens=8192,
+            ),
+        )
+        raw = resp.text or ""
+        data: dict[str, Any] = json.loads(raw)
+    except Exception as exc:
+        log.warning("gemini call failed (%s) — falling back to rules", exc)
+        return _fallback_process(story, profile)
 
     script = normalize(data["script_with_markers"])
     return ProcessedStory(
@@ -169,11 +194,3 @@ def process(story: Story, profile: LengthProfile = LengthProfile.SHORT) -> Proce
         estimated_minutes=float(data.get("estimated_minutes", 0) or 0),
         profile=profile,
     )
-
-
-def _extract_json(raw: str) -> dict[str, Any]:
-    """Tolerate markdown code fences / leading/trailing text around JSON."""
-    m = re.search(r"\{.*\}", raw, re.DOTALL)
-    if not m:
-        raise ValueError("LLM returned no JSON: " + raw[:200])
-    return json.loads(m.group(0))
