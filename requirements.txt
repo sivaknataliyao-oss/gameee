@@ -1,23 +1,53 @@
-# Сбор новостей
-feedparser==6.0.11
-requests==2.32.3
-beautifulsoup4==4.13.3
-pyyaml==6.0.2
+# === Sources ===
+asyncpraw>=7.8.1
+twscrape>=0.17
+playwright>=1.50
 
-# TTS (Google Cloud — основной)
-google-cloud-texttospeech==2.24.0
-# TTS (edge-tts — бесплатный fallback)
-edge-tts==7.0.2
+# === HTTP / async ===
+httpx>=0.27
+aiohttp>=3.11
+tenacity>=9.0
 
-# Видео рендер
-Pillow==11.2.1
+# === Data / config ===
+pydantic>=2.10
+sqlmodel>=0.0.22
+pyyaml>=6.0
+python-dotenv>=1.0
 
-# YouTube upload
-google-api-python-client==2.166.0
-google-auth-oauthlib==1.2.1
+# === CLI / UX ===
+typer>=0.15
+rich>=13.9
 
-# Playwright (для ChatGPT — ты добавишь свой)
-# playwright==1.50.0
+# === Language / NLP ===
+lingua-language-detector>=2.0
 
-# Расписание (опционально, если без cron)
-schedule==1.2.2
+# === LLM (titles, translate, markers, image prompts) ===
+anthropic>=0.40
+openai>=1.55
+
+# === TTS ===
+google-cloud-texttospeech>=2.24
+edge-tts>=7.0
+# silero v5 loaded via torch.hub; torch is optional and heavy
+torch>=2.4; platform_system != "Windows"
+torchaudio>=2.4; platform_system != "Windows"
+
+# === Audio post-process ===
+pyloudnorm>=0.1.1
+soundfile>=0.12
+numpy>=1.26
+
+# === Alignment for subtitles ===
+faster-whisper>=1.1
+
+# === Images ===
+Pillow>=11
+replicate>=1.0
+requests>=2.32
+
+# === Video ===
+ffmpeg-python>=0.2
+
+# === Publish ===
+google-api-python-client>=2.166
+google-auth-oauthlib>=1.2

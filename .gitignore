@@ -5,19 +5,21 @@ dist/
 build/
 .eggs/
 venv/
+.venv/
 .env
+.data/
 output/
 runs/
+secrets/
 *.db
+*.pickle
 .vscode/
 .idea/
 
-# YouTube / Google credentials
-client_secret.json
-youtube_token.pickle
-*.pickle
-
-# Медиа артефакты
+# media
 *.mp4
 *.mp3
 *.wav
+*.mov
+assets/bg/*
+!assets/bg/.gitkeep

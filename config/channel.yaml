@@ -1,0 +1,39 @@
+# Channel branding used in watermark, endcard, and Shorts/TikTok CTAs.
+# Replace placeholder before publishing.
+
+channel:
+  handle: "@channel"            # e.g., "@mystoriesru"
+  display_name: "My Stories"
+  youtube_url: "https://youtube.com/@channel"
+  tiktok_url:  "https://tiktok.com/@channel"
+
+branding:
+  primary_color: "#F5D76E"
+  accent_color:  "#0B0F14"
+  font_title:    "Montserrat-Black.ttf"
+  font_body:     "Manrope-Bold.ttf"
+
+watermark:
+  enabled: true
+  path: assets/channel/watermark.png
+  position: top_right       # top_left | top_right | bottom_left | bottom_right
+  margin: 32
+  opacity: 0.85
+  scale: 0.12               # fraction of width
+
+endcard:
+  enabled: true
+  duration_sec: 4
+  background: assets/channel/endcard_template.png
+  text_template: "Полная история на канале {handle}"
+
+cta_shorts:
+  text_template: "Часть {n}/{k} — продолжение на канале {handle}"
+  show_at_sec: [0, 2]        # near start
+  show_at_end_sec: 3         # last 3 seconds
+
+subtitles:
+  typewriter_enabled: true
+  cps: 20                    # characters per second
+  cursor: "|"
+  cursor_blink_hz: 3

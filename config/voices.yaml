@@ -1,0 +1,38 @@
+# TTS provider config. Only Russian output.
+
+router:
+  primary: google_chirp
+  fallback_chain:
+    - silero_local
+    - openai_tts
+    - edge_tts
+
+voices:
+  google_chirp:
+    # Chirp 3 HD, ru-RU — $30/1M chars, 1M free/month
+    # Names per Google docs (Puck, Charon, Fenrir, Orus, Aoede, Kore, Leda, Zephyr)
+    female_default: ru-RU-Chirp3-HD-Kore
+    male_default:   ru-RU-Chirp3-HD-Charon
+    speaking_rate: 1.02
+    pitch: 0
+
+  silero_local:
+    # v5_ru: ударения + омографы из коробки, CPU ok
+    model_id: v5_ru
+    speaker: kseniya
+    sample_rate: 48000
+    put_accent: true
+    put_yo: true
+
+  openai_tts:
+    model: gpt-4o-mini-tts
+    voice: coral
+    instructions: "Спокойная, ясная дикция, тёплая подача, как рассказчик историй."
+
+  edge_tts:
+    voice: ru-RU-SvetlanaNeural
+    rate: "+0%"
+
+cache:
+  enabled: true
+  dir: ./.data/tts_cache

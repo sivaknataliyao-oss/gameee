@@ -1,313 +1,215 @@
-"""Главный модуль новостного пайплайна.
+"""End-to-end pipeline orchestrator.
 
-Полный flow: новость → сценарий → озвучка → видео → YouTube
-
-Запуск:
-    python -m src.pipeline                      # полный пайплайн
-    python -m src.pipeline --step fetch          # только сбор новостей
-    python -m src.pipeline --step script         # только генерация сценария
-    python -m src.pipeline --step render         # только рендер видео
-    python -m src.pipeline --step upload         # только загрузка на YouTube
-    python -m src.pipeline --dry-run             # прогон без публикации
+Phases per story:
+  1. filter / rights gate
+  2. script (title + RU + markers + image prompts)
+  3. tts + audio master
+  4. image fetch (chain)
+  5. video compose (slideshow + typewriter) + vertical reframe
+  6. clipper: produce N shorts with CTA
+  7. publish packages (YT, TikTok, IG)
 """
+from __future__ import annotations
 
-import argparse
-import json
-import os
+import logging
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-import yaml
+from src.analytics.collector import log_event
+from src.audio.postprocess import concat as audio_concat
+from src.audio.postprocess import master as audio_master
+from src.core import config
+from src.core.models import (
+    LengthProfile,
+    ProcessedStory,
+    RenderArtifacts,
+    Story,
+)
+from src.core.storage import block_story, finish_run, mark_used, start_run
+from src.filters.pipeline import accept
+from src.images.router import ImageRouter
+from src.publish import package as pkg_mod
+from src.publish import tiktok as tiktok_pub
+from src.publish import youtube as yt_pub
+from src.rights.manager import is_cleared
+from src.script import llm as script_llm
+from src.script.segmenter import segments
+from src.tts.router import TTSRouter
+from src.video.clipper import cut_shorts, plan_from_timings
+from src.video.templates.slideshow_typewriter import build as build_template
 
-from .fetcher import fetch_all_sources
-from .filters import filter_by_keywords
-from .parser import process_articles
-from .scriptwriter import generate_script_playwright, save_script
-from .tts import synthesize_google_cloud, script_to_narration
-from .assets import collect_visuals, create_text_slide
-from .thumbnail import create_thumbnail
-from .renderer import render_video
-from .uploader import upload_to_youtube
-
-DEFAULT_CONFIG = Path(__file__).parent.parent / "config" / "sources.yaml"
-
-
-def load_config(config_path: str) -> dict:
-    """Загружает конфигурацию из YAML-файла."""
-    with open(config_path, encoding="utf-8") as f:
-        return yaml.safe_load(f)
-
-
-def create_run_dir(base: str = "runs") -> str:
-    """Создаёт директорию для текущего прогона."""
-    now = datetime.now(timezone.utc)
-    date_dir = now.strftime("%Y-%m-%d")
-    run_name = now.strftime("run_%H%M%SZ")
-    run_dir = os.path.join(base, date_dir, run_name)
-    os.makedirs(run_dir, exist_ok=True)
-    return run_dir
+log = logging.getLogger(__name__)
 
 
-def select_best_story(articles: list[dict]) -> dict | None:
-    """Выбирает лучшую новость для видео."""
-    if not articles:
+@dataclass
+class RunOptions:
+    research_mode: bool = False
+    publish_youtube: bool = False
+    tiktok_package: bool = True
+    profile: LengthProfile = LengthProfile.SHORT
+
+
+def choose_profile(story: Story) -> LengthProfile:
+    lf = config.filters().get("length_profiles", {}).get("long", {})
+    min_pot = float(lf.get("min_long_form_potential", 0.7))
+    min_chars = int(lf.get("min_source_chars", 3000))
+    if story.long_form_potential >= min_pot and len(story.text) >= min_chars:
+        return LengthProfile.LONG
+    return LengthProfile.SHORT
+
+
+def process_one(story: Story, opts: RunOptions) -> RenderArtifacts | None:
+    run_dir = config.runs_dir() / datetime.now(timezone.utc).strftime("%Y-%m-%d") / story.id.replace(":", "_")
+    run_dir.mkdir(parents=True, exist_ok=True)
+    run_id = start_run(story.id, run_dir)
+
+    try:
+        ok, reason = accept(story)
+        if not ok:
+            block_story(story.id, reason)
+            finish_run(run_id, "blocked", reason)
+            log_event(story.id, "blocked", {"reason": reason})
+            return None
+
+        if not is_cleared(story.id, research_mode=opts.research_mode):
+            block_story(story.id, "no_permission")
+            finish_run(run_id, "blocked", "no_permission")
+            log_event(story.id, "blocked_no_rights")
+            return None
+
+        profile = opts.profile if opts.profile is not None else choose_profile(story)
+        processed: ProcessedStory = script_llm.process(story, profile=profile)
+        (run_dir / "processed.json").write_text(
+            processed.model_dump_json(indent=2), encoding="utf-8",
+        )
+
+        # --- TTS ---
+        tts = TTSRouter()
+        seg_audio_paths: list[Path] = []
+        for i, seg in enumerate(segments(processed)):
+            out = run_dir / f"seg_{i:02d}_{seg.kind}.wav"
+            tts.synthesize(seg.text, out)
+            seg_audio_paths.append(out)
+
+        audio_raw = run_dir / "narration_raw.wav"
+        audio_concat(seg_audio_paths, audio_raw, gap_sec=0.35)
+        audio_master_path = run_dir / "narration.wav"
+        audio_master(audio_raw, audio_master_path)
+
+        # Target render duration == audio duration plus small tail. Use ffprobe.
+        duration_sec = _probe_duration(audio_master_path)
+
+        # --- Images ---
+        router = ImageRouter()
+        images_per_min = int(config.images().get("slideshow", {}).get("images_per_minute", 2))
+        needed = max(4, int((duration_sec / 60.0) * images_per_min))
+
+        img_dir = run_dir / "images"
+        img_dir.mkdir(exist_ok=True)
+        images: list[Path] = []
+
+        prompts = processed.image_prompts or [", ".join(processed.keywords[:3]) or processed.selected_title]
+        per_prompt = max(1, needed // max(1, len(prompts)))
+        for pr in prompts:
+            imgs = router.generate(pr, per_prompt, "16:9", img_dir)
+            images.extend(imgs)
+            if len(images) >= needed:
+                break
+
+        if not images:
+            finish_run(run_id, "failed", "no_images")
+            log_event(story.id, "failed_no_images")
+            return None
+        images = images[:needed]
+
+        # --- Video compose ---
+        tpl = build_template(
+            audio_path=audio_master_path,
+            images=images,
+            run_dir=run_dir,
+            duration_sec=duration_sec,
+        )
+
+        # --- Shorts clipping ---
+        chapter_ranges = _chapter_time_ranges(processed, total_sec=duration_sec)
+        plans = plan_from_timings(chapter_ranges, max_short_sec=75.0)
+        shorts_dir = run_dir / "shorts"
+        shorts = cut_shorts(tpl.long_9x16, plans, shorts_dir)
+
+        # --- Package + (optional) publish ---
+        packages_dir = run_dir / "packages"
+        packages_dir.mkdir(exist_ok=True)
+
+        yt_long_pkg = pkg_mod.build_long_youtube(
+            title=processed.selected_title,
+            description=f"{processed.hook}\n\n#storytime",
+            keywords=processed.keywords,
+            video_path=tpl.long_16x9,
+            publish_at=None,
+        )
+        pkg_mod.dump(yt_long_pkg, packages_dir)
+
+        for i, short_mp4 in enumerate(shorts, start=1):
+            yt_short = pkg_mod.build_short("youtube_shorts", i, len(shorts),
+                                           processed.selected_title,
+                                           processed.keywords, short_mp4)
+            tt_short = pkg_mod.build_short("tiktok", i, len(shorts),
+                                           processed.selected_title,
+                                           processed.keywords, short_mp4)
+            pkg_mod.dump(yt_short, packages_dir)
+            pkg_mod.dump(tt_short, packages_dir)
+            if opts.tiktok_package:
+                tiktok_pub.export(tt_short, packages_dir / f"tiktok_{i:02d}")
+
+        if opts.publish_youtube:
+            try:
+                vid = yt_pub.upload(yt_long_pkg)
+                log_event(story.id, "yt_uploaded", {"video_id": vid})
+            except Exception as exc:
+                log.warning("youtube upload failed: %s", exc)
+
+        mark_used(story.id)
+        finish_run(run_id, "ok")
+
+        return RenderArtifacts(
+            story_id=story.id,
+            audio_long=str(audio_master_path),
+            audio_chapters=[str(p) for p in seg_audio_paths],
+            subtitles_ass=str(tpl.subtitles_ass) if tpl.subtitles_ass else None,
+            typewriter_png_dir=str(tpl.typewriter_dir),
+            slideshow_long_mp4=str(tpl.long_16x9),
+            long_video_mp4=str(tpl.long_16x9),
+            shorts_mp4=[str(p) for p in shorts],
+            tiktok_mp4=[str(p) for p in shorts],
+        )
+    except Exception as exc:
+        log.exception("pipeline error: %s", exc)
+        finish_run(run_id, "failed", str(exc))
+        log_event(story.id, "failed", {"error": str(exc)})
         return None
-    # Приоритет: самая свежая с наиболее длинным summary
-    scored = sorted(articles, key=lambda a: len(a.get("summary", "")), reverse=True)
-    return scored[0]
 
 
-def step_fetch(config: dict) -> list[dict]:
-    """Шаг 1: Сбор и фильтрация новостей."""
-    print("\n" + "=" * 50)
-    print("[1/7] СБОР НОВОСТЕЙ")
-    print("=" * 50)
+def _probe_duration(audio_path: Path) -> float:
+    import subprocess
 
-    articles = fetch_all_sources(config["sources"])
-    print(f"Собрано: {len(articles)}")
-
-    articles = process_articles(articles)
-
-    keywords = config.get("filters", {}).get("keywords", [])
-    if keywords:
-        articles = filter_by_keywords(articles, keywords)
-        print(f"После фильтрации: {len(articles)}")
-
-    return articles
-
-
-def step_select(articles: list[dict], run_dir: str) -> dict:
-    """Шаг 2: Выбор главной новости."""
-    print("\n" + "=" * 50)
-    print("[2/7] ВЫБОР НОВОСТИ")
-    print("=" * 50)
-
-    story = select_best_story(articles)
-    if not story:
-        raise RuntimeError("Нет подходящих новостей!")
-
-    print(f"Выбрано: {story['title']}")
-
-    # Сохраняем
-    story_path = os.path.join(run_dir, "story.json")
-    with open(story_path, "w", encoding="utf-8") as f:
-        json.dump(story, f, ensure_ascii=False, indent=2)
-
-    return story
-
-
-def step_script(story: dict, run_dir: str) -> dict:
-    """Шаг 3: Генерация сценария."""
-    print("\n" + "=" * 50)
-    print("[3/7] ГЕНЕРАЦИЯ СЦЕНАРИЯ")
-    print("=" * 50)
-
-    script = generate_script_playwright(story)
-    save_script(script, run_dir)
-
-    total_words = sum(len(s.get("text", "").split()) for s in script.get("sections", []))
-    estimated_minutes = total_words / 150
-    print(f"Слов: {total_words}, ~{estimated_minutes:.1f} мин")
-
-    return script
-
-
-def step_tts(script: dict, run_dir: str, config: dict) -> str:
-    """Шаг 4: Озвучка."""
-    print("\n" + "=" * 50)
-    print("[4/7] ОЗВУЧКА (TTS)")
-    print("=" * 50)
-
-    narration = script_to_narration(script)
-    audio_path = os.path.join(run_dir, "narration.mp3")
-
-    tts_config = config.get("tts", {})
-    voice = tts_config.get("voice", "en-US-Wavenet-D")
-
-    audio_path = synthesize_google_cloud(narration, audio_path, voice=voice)
-    return audio_path
-
-
-def step_assets(script: dict, run_dir: str, config: dict) -> list[str]:
-    """Шаг 5: Сбор визуальных ассетов."""
-    print("\n" + "=" * 50)
-    print("[5/7] СБОР ИЗОБРАЖЕНИЙ")
-    print("=" * 50)
-
-    pexels_key = config.get("pexels", {}).get("api_key") or os.environ.get("PEXELS_API_KEY")
-    images = collect_visuals(script, run_dir, api_key=pexels_key)
-
-    # Если изображений недостаточно — создаём текстовые слайды
-    sections = script.get("sections", [])
-    if len(images) < len(sections):
-        slides_dir = os.path.join(run_dir, "assets")
-        os.makedirs(slides_dir, exist_ok=True)
-        for i, section in enumerate(sections):
-            if i >= len(images):
-                slide_path = os.path.join(slides_dir, f"text_slide_{i:03d}.png")
-                create_text_slide(section.get("heading", f"Section {i+1}"), slide_path)
-                images.append(slide_path)
-
-    return images
-
-
-def step_render(script: dict, audio_path: str, images: list[str],
-                run_dir: str) -> tuple[str, str]:
-    """Шаг 6: Рендер видео + thumbnail."""
-    print("\n" + "=" * 50)
-    print("[6/7] РЕНДЕР ВИДЕО")
-    print("=" * 50)
-
-    video_path = os.path.join(run_dir, "video.mp4")
-    video_path = render_video(script, audio_path, images, video_path)
-
-    # Thumbnail
-    thumb_path = os.path.join(run_dir, "thumbnail.jpg")
-    bg_image = images[0] if images else None
-    create_thumbnail(script.get("title", "News Update"), bg_image, thumb_path)
-
-    return video_path, thumb_path
-
-
-def step_upload(script: dict, video_path: str, thumb_path: str,
-                config: dict, dry_run: bool = False) -> dict:
-    """Шаг 7: Загрузка на YouTube."""
-    print("\n" + "=" * 50)
-    print("[7/7] ПУБЛИКАЦИЯ НА YOUTUBE")
-    print("=" * 50)
-
-    if dry_run:
-        print("[DRY RUN] Пропуск загрузки")
-        return {"status": "dry_run", "video_path": video_path}
-
-    yt_config = config.get("youtube", {})
-
-    result = upload_to_youtube(
-        video_path=video_path,
-        title=script.get("title", "News Update"),
-        description=script.get("description", ""),
-        tags=script.get("tags", ["news", "politics"]),
-        thumbnail_path=thumb_path,
-        privacy=yt_config.get("privacy", "public"),
-        credentials_path=yt_config.get("credentials", "client_secret.json"),
-        token_path=yt_config.get("token", "youtube_token.pickle"),
+    r = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "default=noprint_wrappers=1:nokey=1", str(audio_path)],
+        check=True, capture_output=True, text=True,
     )
-
-    # Сохраняем результат
-    upload_path = os.path.join(os.path.dirname(video_path), "upload.json")
-    with open(upload_path, "w", encoding="utf-8") as f:
-        json.dump(result, f, ensure_ascii=False, indent=2)
-
-    return result
+    return float(r.stdout.strip() or 0)
 
 
-def _find_latest_run() -> str | None:
-    """Находит последний run-каталог с артефактами."""
-    runs_dir = Path("runs")
-    if not runs_dir.exists():
-        return None
-    # Ищем самый свежий run с script.json
-    candidates = sorted(runs_dir.glob("*/run_*"), reverse=True)
-    for d in candidates:
-        if (d / "script.json").exists():
-            return str(d)
-    return None
+def _chapter_time_ranges(processed: ProcessedStory, total_sec: float) -> list[tuple[float, float, str]]:
+    """Naive mapping: distribute chapters evenly across total duration.
 
-
-def run(config_path: str | None = None, step: str | None = None,
-        dry_run: bool = False) -> None:
-    """Запускает полный пайплайн или отдельный шаг.
-
-    --step fetch   : только сбор новостей
-    --step script  : fetch + select + script
-    --step render  : всё до рендера (включая рендер)
-    --step upload  : только загрузка (из последнего прогона)
-    без --step     : полный пайплайн
+    For precise timing we'd thread per-segment audio durations through. This is
+    good enough to produce usable 60–75s shorts.
     """
-    path = config_path or str(DEFAULT_CONFIG)
-    config = load_config(path)
-
-    print("╔══════════════════════════════════════╗")
-    print("║   NEWS VIDEO PIPELINE                ║")
-    print("║   новость → сценарий → видео → YT    ║")
-    print("╚══════════════════════════════════════╝")
-
-    # Если --step upload — берём данные из последнего прогона
-    if step == "upload":
-        last_run = _find_latest_run()
-        if not last_run:
-            raise RuntimeError("Нет предыдущего прогона для загрузки. Запусти полный пайплайн.")
-
-        print(f"\nЗагрузка из прогона: {last_run}")
-        script_path = os.path.join(last_run, "script.json")
-        video_path = os.path.join(last_run, "video.mp4")
-        thumb_path = os.path.join(last_run, "thumbnail.jpg")
-
-        if not os.path.exists(video_path):
-            raise RuntimeError(f"Видео не найдено: {video_path}")
-
-        with open(script_path, encoding="utf-8") as f:
-            script = json.load(f)
-
-        step_upload(script, video_path, thumb_path, config, dry_run)
-        return
-
-    run_dir = create_run_dir()
-    print(f"\nРабочая папка: {run_dir}")
-
-    # 1. Fetch
-    articles = step_fetch(config)
-
-    if step == "fetch":
-        from .storage import save
-        save(articles, config.get("storage", {"type": "json", "path": "output/news.json"}))
-        print("\nГотово! (только сбор)")
-        return
-
-    # 2. Select
-    story = step_select(articles, run_dir)
-
-    # 3. Script
-    script = step_script(story, run_dir)
-
-    if step == "script":
-        print("\nГотово! (до генерации сценария)")
-        return
-
-    # 4. TTS
-    audio_path = step_tts(script, run_dir, config)
-
-    # 5. Assets
-    images = step_assets(script, run_dir, config)
-
-    # 6. Render
-    video_path, thumb_path = step_render(script, audio_path, images, run_dir)
-
-    if step == "render":
-        print(f"\nГотово! Видео: {video_path}")
-        return
-
-    # 7. Upload
-    result = step_upload(script, video_path, thumb_path, config, dry_run)
-
-    print("\n" + "=" * 50)
-    print("PIPELINE ЗАВЕРШЁН")
-    print("=" * 50)
-    print(f"Папка: {run_dir}")
-    if "url" in result:
-        print(f"YouTube: {result['url']}")
-    print("Готово!")
-
-
-def main():
-    parser = argparse.ArgumentParser(description="News Video Pipeline")
-    parser.add_argument("--config", "-c", default=None, help="Путь к конфигу")
-    parser.add_argument("--step", "-s", choices=["fetch", "script", "render", "upload"],
-                        default=None, help="Выполнить только конкретный шаг")
-    parser.add_argument("--dry-run", action="store_true", help="Без публикации на YouTube")
-    args = parser.parse_args()
-    run(args.config, args.step, args.dry_run)
-
-
-if __name__ == "__main__":
-    main()
+    n = max(1, len(processed.chapters))
+    step = total_sec / n
+    out: list[tuple[float, float, str]] = []
+    for i, ch in enumerate(processed.chapters):
+        out.append((i * step, (i + 1) * step, ch.hook))
+    return out
