@@ -14,23 +14,34 @@ def _age_minutes(created_at: datetime) -> float:
     return max(1.0, (now - created_at).total_seconds() / 60.0)
 
 
-def growth_score(source: Source, m: Metrics, created_at: datetime) -> float:
-    """Normalized velocity score. Higher = more 'on fire'."""
+def growth_score(source: Source, m: Metrics, created_at: datetime,
+                 title: str = "") -> float:
+    """Normalized velocity score. Higher = more 'on fire'.
+
+    Applies an engagement prior learned from past videos' retention if one is
+    available (see src/analytics/feedback.py). Safe to call without priors
+    (prior_multiplier returns 1.0 when the store is empty).
+    """
     age = _age_minutes(created_at)
-    # Clamp age: don't reward very fresh posts too much (noise)
     age = max(age, 10.0)
 
     if source == Source.REDDIT:
-        vel = (m.upvotes + 2 * m.comments) / age
-        ratio = m.upvote_ratio or 0.9
-        return vel * ratio
-    if source == Source.TWITTER:
-        vel = (m.favorites + 3 * m.retweets) / age
-        return vel
-    if source == Source.THREADS:
-        vel = (m.favorites + 2 * m.reposts + m.comments) / age
-        return vel
-    return 0.0
+        raw = (m.upvotes + 2 * m.comments) / age * (m.upvote_ratio or 0.9)
+    elif source == Source.TWITTER:
+        raw = (m.favorites + 3 * m.retweets) / age
+    elif source == Source.THREADS:
+        raw = (m.favorites + 2 * m.reposts + m.comments) / age
+    else:
+        raw = 0.0
+
+    # Engagement prior is a thin late-import to avoid a circular dep with
+    # analytics/metrics_store.py at module-load time.
+    try:
+        from src.analytics.feedback import prior_multiplier
+        mult = prior_multiplier(title)
+    except Exception:
+        mult = 1.0
+    return raw * mult
 
 
 # -------- Long-form potential --------

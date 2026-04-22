@@ -42,8 +42,10 @@ from src.rights.manager import is_cleared
 from src.script import llm as script_llm
 from src.script.segmenter import Segment, segments
 from src.tts.router import TTSRouter
+from src.video import intro as intro_mod
 from src.video import thumbnail as thumb
 from src.video.clipper import cut_shorts, plan_from_timings
+from src.video.hook_variants import make_ab
 from src.video.templates.slideshow_typewriter import build as build_template
 
 log = logging.getLogger(__name__)
@@ -55,6 +57,8 @@ class RunOptions:
     publish_youtube: bool = False
     tiktok_package: bool = True
     enqueue_schedule: bool = True
+    ab_test_first_short: bool = True
+    intro_stinger: bool = True
     profile: LengthProfile = LengthProfile.SHORT
 
 
@@ -140,6 +144,17 @@ def process_one(story: Story, opts: RunOptions) -> RenderArtifacts | None:
             duration_sec=duration_sec,
         )
 
+        # --- Intro stinger prepended to the long 16:9 (not to shorts) ---
+        if opts.intro_stinger:
+            try:
+                intro_mp4 = intro_mod.build_intro(run_dir / "intro.mp4", ratio="16:9")
+                if intro_mp4:
+                    with_intro = run_dir / "long_16x9_with_intro.mp4"
+                    intro_mod.prepend(tpl.long_16x9, intro_mp4, with_intro)
+                    tpl.long_16x9 = with_intro
+            except Exception as exc:
+                log.warning("intro stinger failed: %s", exc)
+
         # --- Thumbnail ---
         thumb_path = run_dir / "thumbnail.jpg"
         try:
@@ -152,6 +167,16 @@ def process_one(story: Story, opts: RunOptions) -> RenderArtifacts | None:
         plans = plan_from_timings(chapter_ranges, max_short_sec=75.0)
         shorts_dir = run_dir / "shorts"
         shorts = cut_shorts(tpl.long_9x16, plans, shorts_dir)
+
+        # --- A/B variants for the first short (test which hook wins) ---
+        ab_variants: list[tuple[str, Path]] = []
+        if opts.ab_test_first_short and shorts:
+            try:
+                ab_variants = make_ab(
+                    shorts[0], processed.title_variants, shorts_dir / "ab",
+                )
+            except Exception as exc:
+                log.warning("A/B variants failed: %s", exc)
 
         # --- Package + schedule + publish ---
         packages_dir = run_dir / "packages"
@@ -194,6 +219,23 @@ def process_one(story: Story, opts: RunOptions) -> RenderArtifacts | None:
                         story.id, platform, p.video_path,
                         p.title, p.description, p.hashtags,
                     )
+                # A/B: enqueue both variants of the first short so the scheduler
+                # spaces them out per-platform cadence and we can compare CTR.
+                for variant_label, variant_path in ab_variants:
+                    for platform in ("youtube_shorts", "tiktok"):
+                        variant_title = (
+                            (processed.title_variants[0] if variant_label == "A"
+                             else (processed.title_variants[1]
+                                   if len(processed.title_variants) > 1
+                                   else processed.title_variants[0]))
+                        )
+                        scheduler.enqueue(
+                            story.id, platform, variant_path,
+                            f"[{variant_label}] " + variant_title[:60],
+                            f"Variant {variant_label}. " + processed.hook,
+                            processed.keywords + ["shorts", "storytime",
+                                                  f"variant_{variant_label.lower()}"],
+                        )
             except Exception as exc:
                 log.warning("scheduler.enqueue failed: %s", exc)
 

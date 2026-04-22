@@ -98,7 +98,7 @@ class RedditAdapter(SourceAdapter):
                                     upvote_ratio=float(post.upvote_ratio or 0),
                                 ),
                             )
-                            s.growth_score = growth_score(s.source, s.metrics, s.created_at)
+                            s.growth_score = growth_score(s.source, s.metrics, s.created_at, s.title)
                             s.long_form_potential = long_form_potential(s)
                             out.append(s)
                 except Exception as exc:  # one sub/sort shouldn't kill the scan

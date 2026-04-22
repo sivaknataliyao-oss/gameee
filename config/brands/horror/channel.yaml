@@ -1,0 +1,11 @@
+# Example brand overlay: a horror/nosleep-style channel.
+channel:
+  handle: "@darkstoriesru"
+  display_name: "Dark Stories"
+
+branding:
+  primary_color: "#C0392B"
+  accent_color:  "#000000"
+
+cta_shorts:
+  text_template: "Часть {n}/{k} — жутких историй ещё больше на канале {handle}"

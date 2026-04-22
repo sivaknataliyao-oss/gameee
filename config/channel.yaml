@@ -21,6 +21,14 @@ watermark:
   opacity: 0.85
   scale: 0.12               # fraction of width
 
+intro:
+  enabled: true
+  # If assets/channel/intro.mp4 exists it's used as-is; otherwise we generate
+  # a 3-second poster from avatar + handle on the brand background.
+  path: assets/channel/intro.mp4
+  duration_sec: 3.0
+  generated_fallback: true
+
 endcard:
   enabled: true
   duration_sec: 4

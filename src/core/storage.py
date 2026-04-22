@@ -32,6 +32,7 @@ class StoryRow(SQLModel, table=True):
     metrics_json: str = "{}"
     growth_score: float = 0.0
     long_form_potential: float = 0.0
+    simhash: int | None = None    # 64-bit fingerprint for dedup; None = not computed
     used: bool = False            # marked after successful publish
     blocked_reason: str | None = None
 
@@ -95,8 +96,21 @@ def upsert_story(row: StoryRow) -> None:
             s.add(row)
         else:
             # refresh volatile fields
-            for f in ("metrics_json", "growth_score", "long_form_potential", "text", "title"):
+            for f in ("metrics_json", "growth_score", "long_form_potential",
+                      "text", "title", "simhash"):
                 setattr(existing, f, getattr(row, f))
+
+
+def recent_simhashes(since_days: int = 60) -> list[tuple[str, int]]:
+    """Return (story_id, simhash) for non-null simhashes fetched in the window."""
+    from datetime import timedelta
+    cutoff = datetime.now(timezone.utc) - timedelta(days=since_days)
+    with session() as s:
+        q = select(StoryRow.id, StoryRow.simhash).where(
+            StoryRow.simhash.is_not(None),
+            StoryRow.fetched_at >= cutoff,
+        )
+        return [(sid, int(h)) for sid, h in s.exec(q) if h is not None]
 
 
 def get_story(story_id: str) -> StoryRow | None:

@@ -127,6 +127,6 @@ class ThreadsAdapter(SourceAdapter):
             created_at=now,  # precise timestamp requires extra DOM parse
             metrics=Metrics(),
         )
-        story.growth_score = growth_score(story.source, story.metrics, story.created_at)
+        story.growth_score = growth_score(story.source, story.metrics, story.created_at, story.title)
         story.long_form_potential = long_form_potential(story)
         return story

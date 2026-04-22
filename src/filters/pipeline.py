@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 from src.core import config
-from src.core.models import Lang, Story
-from src.filters import language, nsfw, quality
+from src.core.models import Story
+from src.core.storage import recent_simhashes
+from src.filters import dedup, language, nsfw, quality
 
 
 def accept(story: Story) -> tuple[bool, str]:
@@ -29,5 +30,21 @@ def accept(story: Story) -> tuple[bool, str]:
     ok, q_reason = quality.quality_ok(text, cfg.get("length", {}) | cfg.get("quality", {}))
     if not ok:
         return False, f"quality:{q_reason}"
+
+    # 5) Dedup — reject near-duplicates of stories seen in the recent window.
+    dcfg = cfg.get("dedup", {}) or {}
+    if dcfg.get("enabled", True):
+        shingle = int(dcfg.get("shingle_size", 6))
+        threshold = int(dcfg.get("simhash_threshold", 4))
+        history = int(dcfg.get("history_days", 60))
+        our_hash = dedup.simhash(text, k=shingle)
+        # Piggy-back the computed hash onto the story so storage.upsert_story
+        # can persist it without recomputing.
+        object.__setattr__(story, "_simhash", our_hash)
+        for sid, other in recent_simhashes(since_days=history):
+            if sid == story.id:
+                continue
+            if dedup.hamming(our_hash, other) <= threshold:
+                return False, f"dedup:~{sid}"
 
     return True, "ok"

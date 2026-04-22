@@ -124,7 +124,39 @@ python -m src.cli schedule
 # опубликовать то, у чего уже наступил `planned_for`
 python -m src.cli dispatch --limit 5
 python -m src.cli dispatch --dry-run
+
+# подтянуть YT Analytics по загруженным видео и пересчитать веса тем
+python -m src.cli pull-analytics --days 28
+
+# топ-ключевых слов, которые работают на канале
+python -m src.cli analytics
+
+# бренд-канал (overlay поверх дефолтов из config/brands/<name>/)
+python -m src.cli --brand=horror run
+GAMEEE_BRAND=horror python -m src.cli loop
 ```
+
+## Мульти-канал / бренды
+
+Клади overlay-YAML-ы в `config/brands/<название>/`:
+
+```
+config/brands/horror/
+├── channel.yaml      # своё handle, цвета, watermark
+├── sources.yaml      # свой whitelist сабреддитов
+└── audio.yaml        # своя папка с музыкой
+```
+
+Каждый overlay deep-merge'ит только те ключи, которые в нём указаны,
+остальное берётся из базового `config/*.yaml`. Runs раскладываются в
+`runs/<brand>/YYYY-MM-DD/...`, БД общая.
+
+## A/B тест хуков
+
+Для первого Short пайплайн автоматически делает две версии (A и B) с
+разными заголовками-открывашками из `title_variants`. Scheduler
+разносит их по времени, после сбора статистики через `pull-analytics`
+смотрим, какой вариант выиграл (он добавит свои keyword'ы в веса).
 
 ## Музыка / SFX
 

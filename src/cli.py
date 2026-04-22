@@ -31,6 +31,18 @@ console = Console()
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 
 
+@app.callback()
+def _root(
+    brand: str = typer.Option(
+        "default", "--brand", "-b",
+        help="Brand overlay to apply (see config/brands/). Default = base configs only.",
+    ),
+) -> None:
+    if brand:
+        from src.core.config import set_active_brand
+        set_active_brand(brand)
+
+
 def _setup_logging() -> None:
     level = os.getenv("GAMEEE_LOG_LEVEL", "INFO")
     logging.basicConfig(
@@ -40,6 +52,8 @@ def _setup_logging() -> None:
 
 
 def _story_to_row(s: Story) -> StoryRow:
+    from src.filters.dedup import simhash
+    text = s.text or s.title
     return StoryRow(
         id=s.id, source=s.source.value, source_id=s.source_id,
         permalink=s.permalink, author=s.author, title=s.title, text=s.text,
@@ -47,6 +61,7 @@ def _story_to_row(s: Story) -> StoryRow:
         created_at=s.created_at, fetched_at=s.fetched_at,
         metrics_json=metrics_to_json(s.metrics.model_dump()),
         growth_score=s.growth_score, long_form_potential=s.long_form_potential,
+        simhash=simhash(text) if text else None,
     )
 
 
@@ -216,6 +231,40 @@ def _row_to_story(row: StoryRow) -> Story:
         growth_score=row.growth_score,
         long_form_potential=row.long_form_potential,
     )
+
+
+@app.command("pull-analytics")
+def pull_analytics_cmd(days: int = typer.Option(28, help="window in days")) -> None:
+    """Fetch YouTube Analytics for uploaded videos and rebuild engagement priors."""
+    _setup_logging()
+    from src.analytics import feedback, youtube as yt_analytics
+
+    try:
+        written = yt_analytics.pull(days=days)
+        console.print(f"[green]pulled {written} metric rows[/green]")
+    except Exception as exc:
+        console.print(f"[red]analytics pull failed: {exc}[/red]")
+        return
+
+    priors = feedback.recompute_priors()
+    console.print(f"[green]priors: {len(priors)} keywords[/green]")
+
+
+@app.command("analytics")
+def analytics_cmd(limit: int = 20) -> None:
+    """Show top keywords in the engagement priors table."""
+    _setup_logging()
+    from src.analytics.feedback import load_priors
+    priors = load_priors()
+    if not priors:
+        console.print("[dim]no priors yet — run `pull-analytics` after some uploads[/dim]")
+        return
+    table = Table(title=f"Top {limit} engagement-prior keywords")
+    table.add_column("keyword")
+    table.add_column("weight", justify="right")
+    for k, v in sorted(priors.items(), key=lambda kv: -kv[1])[:limit]:
+        table.add_row(k, f"{v:.3f}")
+    console.print(table)
 
 
 @app.command("costs")

@@ -1,0 +1,12 @@
+reddit:
+  enabled: true
+  scan_interval_sec: 180
+  deep_fetch_top_n: 20
+  subreddits:
+    - {name: LetsNotMeet,   sort: [hot, new]}
+    - {name: nosleep,       sort: [hot, top]}
+    - {name: Paranormal,    sort: [hot]}
+    - {name: Thetruthishere, sort: [hot]}
+    - {name: Ghoststories,  sort: [hot]}
+    - {name: shortscarystories, sort: [hot, new]}
+    - {name: Pikabu,        sort: [hot]}      # ru: страшилки тоже попадают

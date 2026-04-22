@@ -28,7 +28,8 @@ class TypewriterConfig:
     margin_y: int = 320         # pixels from bottom
     stroke_width: int = 4
     cursor: str = "|"
-    cursor_blink_hz: float = 3.0
+    # Blink is auto-scaled to speech tempo; this is a ceiling.
+    cursor_blink_hz_max: float = 4.0
 
 
 def render_png_sequence(
@@ -54,11 +55,22 @@ def render_png_sequence(
 
     # Flatten the whole reveal schedule: for each character, compute when it should appear.
     char_schedule: list[tuple[str, float]] = []   # (char, show_at_sec)
+    # Also record local speech rate per time window for adaptive blink.
+    local_cps: list[tuple[float, float, float]] = []  # (start, end, cps)
     for w in words:
         text = w.text + " "
-        step = max((w.end - w.start) / max(1, len(text)), 0.01)
+        span = max(w.end - w.start, 0.05)
+        step = span / max(1, len(text))
         for i, ch in enumerate(text):
             char_schedule.append((ch, w.start + i * step))
+        cps_here = len(text) / span
+        local_cps.append((w.start, w.end, cps_here))
+
+    def _cps_at(t: float) -> float:
+        for s, e, c in local_cps:
+            if s <= t <= e:
+                return c
+        return 10.0  # fallback when t is in a gap
 
     for frame_idx in range(total_frames):
         t = frame_idx / cfg.fps
@@ -75,8 +87,10 @@ def render_png_sequence(
         lines = _wrap(visible, cfg.line_chars)
         display = "\n".join(lines[-2:])
 
-        # Blinking cursor
-        blink_on = int(t * cfg.cursor_blink_hz) % 2 == 0
+        # Blinking cursor — frequency follows local speech speed
+        # (faster speech -> faster blink, up to cursor_blink_hz_max).
+        hz = min(cfg.cursor_blink_hz_max, _cps_at(t) / 8.0 + 1.5)
+        blink_on = int(t * hz) % 2 == 0
         if blink_on:
             display += cfg.cursor
 

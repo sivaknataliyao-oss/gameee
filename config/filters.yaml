@@ -15,8 +15,9 @@ length:
   max_chars: 15000
 
 dedup:
+  enabled: true
   shingle_size: 6
-  simhash_threshold: 4       # Hamming distance
+  simhash_threshold: 4       # Hamming distance on 64-bit fingerprint
   history_days: 60
 
 quality:
