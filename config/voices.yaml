@@ -6,6 +6,10 @@ router:
     - silero_local
     - openai_tts
     - edge_tts
+  # When a segment contains dialogue (SpeakerName: text lines) — try this
+  # provider first, it will use Gemini multi-speaker TTS. Segments without
+  # dialogue skip this and go to `primary` directly.
+  dialogue_primary: gemini_tts
 
 voices:
   google_chirp:
@@ -16,8 +20,18 @@ voices:
     speaking_rate: 1.02
     pitch: 0
 
+  gemini_tts:
+    # gemini-2.5-flash-preview-tts / gemini-2.5-pro-preview-tts.
+    # Flash is cheaper; Pro has slightly better style-following.
+    model: gemini-2.5-flash-preview-tts
+    # Only two speakers are supported per request. We map any dialogue
+    # character to "Герой"; narration stays "Рассказчик".
+    narrator_voice: Kore        # female, warm
+    dialogue_voice: Charon      # male, dramatic
+    # Extra prompt to steer style — prefixed to `contents`.
+    style_hint: "Read this like an engaging storyteller. Keep narration calm and expressive; make dialogue emotional and in character."
+
   silero_local:
-    # v5_ru: ударения + омографы из коробки, CPU ok
     model_id: v5_ru
     speaker: kseniya
     sample_rate: 48000

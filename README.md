@@ -13,8 +13,10 @@ CTA на твой канал.
    (есть `--research` режим для внутренних прогонов).
 4. **Script** — Gemini 2.5 Flash генерирует: перевод EN→RU, цепляющий заголовок, маркеры
    `[HOOK]/[CHAPTER_N]/[CLIFFHANGER_N]/[OUTRO]`, ключевые слова + промпты для картинок.
-5. **TTS** — Google **Chirp 3 HD** (русский) как основной, Silero v5 локально как
-   fallback, OpenAI `gpt-4o-mini-tts` и Edge TTS — в резервной цепочке. Кеш в `.data/tts_cache`.
+5. **TTS** — Google **Chirp 3 HD** (русский) как основной для нарратива; для
+   сегментов с диалогами автоматически включается **Gemini 2.5 TTS multi-speaker**
+   (рассказчик + герой — разные голоса). Silero v5 локально, OpenAI `gpt-4o-mini-tts`
+   и Edge TTS — fallback-цепочка. Кеш в `.data/tts_cache`.
 6. **Images** — цепочка провайдеров: `pexels → flux_replicate → openai_images →
    chatgpt_playwright → imagefx_playwright → local_flux`. Первый, кто вернул
    результат — выигрывает. Кеш в `.data/img_cache`.
@@ -150,6 +152,19 @@ config/brands/horror/
 Каждый overlay deep-merge'ит только те ключи, которые в нём указаны,
 остальное берётся из базового `config/*.yaml`. Runs раскладываются в
 `runs/<brand>/YYYY-MM-DD/...`, БД общая.
+
+## Многоголосая озвучка для диалогов
+
+Gemini инструктируется расставлять префиксы спикеров (`Рассказчик:`,
+`Герой:`/`Героиня:` и т.п.) в script_with_markers. TTS-роутер детектит их
+и для таких сегментов автоматически вызывает Gemini 2.5 TTS в
+multi-speaker-режиме (2 голоса: нарратор + герой). Сегменты без диалогов
+идут по обычной цепочке (Chirp 3 HD → Silero → ...).
+
+Все имена персонажей, кроме `Рассказчик`, схлопываются на одну роль
+`Герой` — Gemini TTS поддерживает максимум 2 голоса за запрос.
+
+Вырубить: убрать `dialogue_primary: gemini_tts` из `config/voices.yaml`.
 
 ## A/B тест хуков
 
