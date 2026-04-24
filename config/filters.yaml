@@ -1,0 +1,42 @@
+# Filters applied after ingestion, before rights/script stages.
+
+language:
+  allowed: [ru, en]   # EN gets auto-translated to RU downstream
+  min_confidence: 0.75
+
+nsfw:
+  block_source_flag: true    # drop Reddit over_18 / NSFW subreddits outright
+  block_keywords_ru: [порно, анал, минет, эротик, онлифанс, ебал]
+  block_keywords_en: [porn, nsfw, anal, blowjob, sextape, onlyfans]
+  block_violent: true
+
+length:
+  min_chars: 300
+  max_chars: 15000
+
+dedup:
+  enabled: true
+  shingle_size: 6
+  simhash_threshold: 4       # Hamming distance on 64-bit fingerprint
+  history_days: 60
+
+monetization:
+  enabled: true
+  # Only block if the LLM is reasonably sure. Low confidence -> let it through
+  # and rely on manual review + nsfw/quality safety nets.
+  min_confidence_to_block: 0.7
+
+quality:
+  max_uppercase_ratio: 0.3
+  max_emoji_ratio: 0.15
+  ban_pii_hard: true         # names + emails + phones -> redact
+
+length_profiles:
+  short:
+    target_minutes: [5, 10]
+    shorts_per_story: [3, 6]
+  long:
+    target_minutes: [15, 25]
+    shorts_per_story: [8, 15]
+    min_long_form_potential: 0.7
+    min_source_chars: 3000

@@ -1,0 +1,52 @@
+# TTS provider config. Only Russian output.
+
+router:
+  primary: google_chirp
+  fallback_chain:
+    - silero_local
+    - openai_tts
+    - edge_tts
+  # When a segment contains dialogue (SpeakerName: text lines) — try this
+  # provider first, it will use Gemini multi-speaker TTS. Segments without
+  # dialogue skip this and go to `primary` directly.
+  dialogue_primary: gemini_tts
+
+voices:
+  google_chirp:
+    # Chirp 3 HD, ru-RU — $30/1M chars, 1M free/month
+    # Names per Google docs (Puck, Charon, Fenrir, Orus, Aoede, Kore, Leda, Zephyr)
+    female_default: ru-RU-Chirp3-HD-Kore
+    male_default:   ru-RU-Chirp3-HD-Charon
+    speaking_rate: 1.02
+    pitch: 0
+
+  gemini_tts:
+    # gemini-2.5-flash-preview-tts / gemini-2.5-pro-preview-tts.
+    # Flash is cheaper; Pro has slightly better style-following.
+    model: gemini-2.5-flash-preview-tts
+    # Only two speakers are supported per request. We map any dialogue
+    # character to "Герой"; narration stays "Рассказчик".
+    narrator_voice: Kore        # female, warm
+    dialogue_voice: Charon      # male, dramatic
+    # Extra prompt to steer style — prefixed to `contents`.
+    style_hint: "Read this like an engaging storyteller. Keep narration calm and expressive; make dialogue emotional and in character."
+
+  silero_local:
+    model_id: v5_ru
+    speaker: kseniya
+    sample_rate: 48000
+    put_accent: true
+    put_yo: true
+
+  openai_tts:
+    model: gpt-4o-mini-tts
+    voice: coral
+    instructions: "Спокойная, ясная дикция, тёплая подача, как рассказчик историй."
+
+  edge_tts:
+    voice: ru-RU-SvetlanaNeural
+    rate: "+0%"
+
+cache:
+  enabled: true
+  dir: ./.data/tts_cache

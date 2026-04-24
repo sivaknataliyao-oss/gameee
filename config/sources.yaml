@@ -1,63 +1,52 @@
-# === ИСТОЧНИКИ НОВОСТЕЙ (RSS) ===
-sources:
-  - name: "BBC Politics"
-    url: "http://feeds.bbci.co.uk/news/politics/rss.xml"
-    category: "politics"
+# Sources: what to crawl.
+# Each source has a list of targets and a scan cadence.
 
-  - name: "Reuters World"
-    url: "https://www.reutersagency.com/feed/"
-    category: "politics"
+reddit:
+  enabled: true
+  scan_interval_sec: 180
+  # Deep fetch (full text, top comments) for top-N candidates
+  deep_fetch_top_n: 20
+  subreddits:
+    # Story-oriented RU-friendly via translation
+    - name: AskReddit
+      sort: [new, rising]
+      min_upvotes: 50
+    - name: tifu
+      sort: [hot, new]
+    - name: TrueOffMyChest
+      sort: [hot, new]
+    - name: AmItheAsshole
+      sort: [hot]
+    - name: relationship_advice
+      sort: [hot]
+    - name: MaliciousCompliance
+      sort: [hot]
+    - name: pettyrevenge
+      sort: [hot]
+    - name: ProRevenge
+      sort: [hot]
+    - name: confession
+      sort: [hot]
+    - name: LetsNotMeet
+      sort: [hot]
+    # Russian-speaking
+    - name: Pikabu
+      sort: [hot, new]
+    - name: ru
+      sort: [hot]
 
-  - name: "Al Jazeera"
-    url: "https://www.aljazeera.com/xml/rss/all.xml"
-    category: "world"
+twitter:
+  enabled: true
+  scan_interval_sec: 300
+  queries:
+    # Search queries (twscrape .search())
+    - "min_faves:500 lang:ru"
+    - "виральный OR трогательная история lang:ru"
+    - '"storytime" OR "story time" lang:en min_faves:1000'
+  accounts: []  # specific @handles to monitor
 
-  - name: "The Guardian World"
-    url: "https://www.theguardian.com/world/rss"
-    category: "politics"
-
-  - name: "NPR Politics"
-    url: "https://feeds.npr.org/1014/rss.xml"
-    category: "politics"
-
-# === ФИЛЬТРАЦИЯ ===
-filters:
-  keywords:
-    - "election"
-    - "president"
-    - "parliament"
-    - "congress"
-    - "sanctions"
-    - "diplomacy"
-    - "summit"
-    - "war"
-    - "treaty"
-    - "government"
-    - "minister"
-    - "policy"
-
-# === СОХРАНЕНИЕ ПРОМЕЖУТОЧНЫХ ДАННЫХ ===
-storage:
-  type: "json"
-  path: "output/news.json"
-
-# === TTS ===
-tts:
-  voice: "en-US-Wavenet-D"  # Google Cloud WaveNet голос
-  language: "en-US"
-
-# === ИЗОБРАЖЕНИЯ ===
-# Получи бесплатный ключ: https://www.pexels.com/api/
-pexels:
-  api_key: ""  # или задай через env: PEXELS_API_KEY
-
-# === YOUTUBE ===
-youtube:
-  credentials: "client_secret.json"   # OAuth credentials от Google Cloud
-  token: "youtube_token.pickle"       # автосохранённый токен
-  privacy: "public"                   # public | unlisted | private
-
-# === РАСПИСАНИЕ ===
-schedule:
-  cron: "0 7 * * *"  # каждый день в 7:00 UTC
-  timezone: "UTC"
+threads:
+  enabled: false  # needs Playwright session; flip after running setup_auth
+  scan_interval_sec: 600
+  users: []      # @handles
+  hashtags: []

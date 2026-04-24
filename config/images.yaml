@@ -1,0 +1,65 @@
+# Image provider chain. Each provider is tried in order; first success wins.
+
+router:
+  chain:
+    - pexels            # stock, fast, free
+    - flux_replicate    # cheap AI ~$0.003/img
+    - openai_images     # gpt-image-1 / DALL-E 3
+    - chatgpt_playwright  # last-resort UI scrape
+    - imagefx_playwright  # last-resort UI scrape
+    - local_flux        # if local GPU available
+  per_story_budget_usd: 0.10
+  # hard monthly cap across paid image providers; 0 = disabled
+  per_month_cap_usd: 15.0
+
+style:
+  prefix: "cinematic, moody, warm tones, film grain, 35mm, dramatic lighting"
+  suffix: "no text, no watermarks, no faces in focus"
+  negative: "cartoon, 3d render, uncanny, distorted hands, text, logo"
+
+ratios:
+  long_form: "16:9"    # 1920x1080
+  shorts:    "9:16"    # 1080x1920
+
+slideshow:
+  images_per_minute: 2         # ~30s per slide
+  ai_generated_ratio: 0.3      # 30% AI, 70% stock
+  ken_burns:
+    zoom_start: 1.0
+    zoom_end: 1.2
+    duration_sec: 5
+
+pexels:
+  per_page: 20
+  orientation_for_long: landscape
+  orientation_for_shorts: portrait
+
+flux_replicate:
+  model: "black-forest-labs/flux-schnell"
+  num_inference_steps: 4
+  guidance: 3.5
+
+openai_images:
+  model: gpt-image-1
+  quality: medium
+  size_long: "1536x1024"
+  size_shorts: "1024x1536"
+
+chatgpt_playwright:
+  url: "https://chatgpt.com/"
+  timeout_sec: 120
+  max_images_per_hour: 20
+
+imagefx_playwright:
+  url: "https://labs.google/fx/tools/image-fx"
+  timeout_sec: 120
+  max_images_per_hour: 40
+
+local_flux:
+  model_path: ""            # e.g., "black-forest-labs/FLUX.1-schnell"
+  device: "cuda"
+
+cache:
+  enabled: true
+  dir: ./.data/img_cache
+  reuse_within_days: 30
