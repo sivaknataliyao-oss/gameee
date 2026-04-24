@@ -9,6 +9,7 @@ aiohttp>=3.11
 tenacity>=9.0
 
 # === Data / config ===
+num2words>=0.5.13
 pydantic>=2.10
 sqlmodel>=0.0.22
 pyyaml>=6.0

@@ -133,6 +133,9 @@ python -m src.cli pull-analytics --days 28
 # топ-ключевых слов, которые работают на канале
 python -m src.cli analytics
 
+# превью всех артефактов одной истории в браузере
+python -m src.cli preview reddit:abc123 --open
+
 # бренд-канал (overlay поверх дефолтов из config/brands/<name>/)
 python -m src.cli --brand=horror run
 GAMEEE_BRAND=horror python -m src.cli loop

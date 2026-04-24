@@ -233,6 +233,24 @@ def _row_to_story(row: StoryRow) -> Story:
     )
 
 
+@app.command("preview")
+def preview_cmd(
+    story_id: str,
+    open_in_browser: bool = typer.Option(False, "--open/--no-open",
+                                         help="xdg-open the resulting HTML"),
+) -> None:
+    """Render runs/<brand>/<date>/<story_id>/index.html for visual QA."""
+    _setup_logging()
+    from src.publish import preview
+
+    run_dir = preview.find_run_dir(story_id)
+    if run_dir is None:
+        console.print(f"[red]no run dir for {story_id}[/red]")
+        raise typer.Exit(code=1)
+    out = preview.build(run_dir, open_in_browser=open_in_browser)
+    console.print(f"[green]preview[/green] -> {out}")
+
+
 @app.command("pull-analytics")
 def pull_analytics_cmd(days: int = typer.Option(28, help="window in days")) -> None:
     """Fetch YouTube Analytics for uploaded videos and rebuild engagement priors."""

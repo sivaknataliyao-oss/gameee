@@ -4,7 +4,7 @@ from __future__ import annotations
 from src.core import config
 from src.core.models import Story
 from src.core.storage import recent_simhashes
-from src.filters import dedup, language, nsfw, quality
+from src.filters import dedup, language, monetization, nsfw, quality
 
 
 def accept(story: Story) -> tuple[bool, str]:
@@ -38,13 +38,19 @@ def accept(story: Story) -> tuple[bool, str]:
         threshold = int(dcfg.get("simhash_threshold", 4))
         history = int(dcfg.get("history_days", 60))
         our_hash = dedup.simhash(text, k=shingle)
-        # Piggy-back the computed hash onto the story so storage.upsert_story
-        # can persist it without recomputing.
         object.__setattr__(story, "_simhash", our_hash)
         for sid, other in recent_simhashes(since_days=history):
             if sid == story.id:
                 continue
             if dedup.hamming(our_hash, other) <= threshold:
                 return False, f"dedup:~{sid}"
+
+    # 6) Monetization pre-filter (LLM classifier). Fail-open if LLM unavailable.
+    mcfg = cfg.get("monetization", {}) or {}
+    if mcfg.get("enabled", True):
+        min_conf = float(mcfg.get("min_confidence_to_block", 0.7))
+        verdict = monetization.classify(text, title=story.title)
+        if not verdict.friendly and verdict.confidence >= min_conf:
+            return False, f"monetization:{verdict.risk_category}"
 
     return True, "ok"

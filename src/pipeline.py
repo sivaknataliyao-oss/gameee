@@ -43,6 +43,7 @@ from src.script import llm as script_llm
 from src.script.segmenter import Segment, segments
 from src.tts.router import TTSRouter
 from src.video import intro as intro_mod
+from src.video import loop_hook
 from src.video import thumbnail as thumb
 from src.video.clipper import cut_shorts, plan_from_timings
 from src.video.hook_variants import make_ab
@@ -59,6 +60,7 @@ class RunOptions:
     enqueue_schedule: bool = True
     ab_test_first_short: bool = True
     intro_stinger: bool = True
+    loop_hook: bool = True
     profile: LengthProfile = LengthProfile.SHORT
 
 
@@ -145,6 +147,7 @@ def process_one(story: Story, opts: RunOptions) -> RenderArtifacts | None:
         )
 
         # --- Intro stinger prepended to the long 16:9 (not to shorts) ---
+        intro_offset = 0.0
         if opts.intro_stinger:
             try:
                 intro_mp4 = intro_mod.build_intro(run_dir / "intro.mp4", ratio="16:9")
@@ -152,6 +155,7 @@ def process_one(story: Story, opts: RunOptions) -> RenderArtifacts | None:
                     with_intro = run_dir / "long_16x9_with_intro.mp4"
                     intro_mod.prepend(tpl.long_16x9, intro_mp4, with_intro)
                     tpl.long_16x9 = with_intro
+                    intro_offset = _probe_duration(intro_mp4)
             except Exception as exc:
                 log.warning("intro stinger failed: %s", exc)
 
@@ -167,6 +171,21 @@ def process_one(story: Story, opts: RunOptions) -> RenderArtifacts | None:
         plans = plan_from_timings(chapter_ranges, max_short_sec=75.0)
         shorts_dir = run_dir / "shorts"
         shorts = cut_shorts(tpl.long_9x16, plans, shorts_dir)
+
+        # --- Loop-hook post-processing (seamless end -> start crossfade) ---
+        if opts.loop_hook and shorts:
+            looped: list[Path] = []
+            for sh in shorts:
+                try:
+                    out = sh.with_name(sh.stem + "_loop.mp4")
+                    loop_hook.make_loopable(sh, out, overlap=0.5)
+                    sh.unlink(missing_ok=True)
+                    out.rename(sh)
+                    looped.append(sh)
+                except Exception as exc:
+                    log.warning("loop_hook failed on %s: %s", sh.name, exc)
+                    looped.append(sh)
+            shorts = looped
 
         # --- A/B variants for the first short (test which hook wins) ---
         ab_variants: list[tuple[str, Path]] = []
@@ -188,6 +207,8 @@ def process_one(story: Story, opts: RunOptions) -> RenderArtifacts | None:
             keywords=processed.keywords,
             video_path=tpl.long_16x9,
             publish_at=None,
+            chapter_ranges=chapter_ranges,
+            intro_offset_sec=intro_offset,
         )
         pkg_mod.dump(yt_long_pkg, packages_dir)
 

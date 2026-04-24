@@ -7,6 +7,7 @@ from pathlib import Path
 from src.core import config
 from src.tts import cache
 from src.tts.base import TTSProvider
+from src.tts.text_normalizer import normalize_for_tts
 
 log = logging.getLogger(__name__)
 
@@ -50,6 +51,10 @@ class TTSRouter:
         return list(self.chain)
 
     def synthesize(self, text: str, out_path: Path, voice_hint: str | None = None) -> Path:
+        # TTS-specific normalization (numbers/dates/currency → words) happens
+        # once, before provider selection AND before cache keying — otherwise
+        # the same logical text with "42" vs "сорок два" would cache twice.
+        text = normalize_for_tts(text)
         order = self._ordered(text)
         for provider_name in order:
             try:
