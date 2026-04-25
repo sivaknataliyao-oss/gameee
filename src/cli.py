@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -44,11 +43,9 @@ def _root(
 
 
 def _setup_logging() -> None:
-    level = os.getenv("GAMEEE_LOG_LEVEL", "INFO")
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s",
-    )
+    import os
+    from src.core.logging import setup
+    setup(level=os.getenv("GAMEEE_LOG_LEVEL", "INFO"))
 
 
 def _story_to_row(s: Story) -> StoryRow:
