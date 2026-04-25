@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import logging
 import subprocess
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -52,16 +51,8 @@ from src.video.templates.slideshow_typewriter import build as build_template
 log = logging.getLogger(__name__)
 
 
-@dataclass
-class RunOptions:
-    research_mode: bool = False
-    publish_youtube: bool = False
-    tiktok_package: bool = True
-    enqueue_schedule: bool = True
-    ab_test_first_short: bool = True
-    intro_stinger: bool = True
-    loop_hook: bool = True
-    profile: LengthProfile = LengthProfile.SHORT
+# RunOptions moved to src/core/context.py; re-export for backward compatibility.
+from src.core.context import RunOptions  # noqa: F401
 
 
 def choose_profile(story: Story) -> LengthProfile:
