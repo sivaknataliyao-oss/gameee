@@ -71,3 +71,28 @@ def test_exception_serialized() -> None:
         logger.error("caught", exc_info=True)
     rec = json.loads(buf.getvalue().strip())
     assert "ValueError: boom" in rec["exc_info"]
+
+
+def test_bind_log_merges_caller_extra_dict() -> None:
+    """The stdlib `extra={...}` idiom on a bound adapter must merge, not be dropped.
+
+    Bound fields seed the dict, kwargs override them, and caller's extra={...}
+    overrides everything (matching how a stdlib LoggerAdapter user would expect
+    explicit extras to behave).
+    """
+    logger, buf = _capture()
+    adapter = bind_log(logger, stage="A", story_id="reddit:abc")
+    adapter.info("m", extra={"foo": "bar", "stage": "from-extra"})
+    rec = json.loads(buf.getvalue().strip())
+    assert rec["foo"] == "bar"
+    assert rec["story_id"] == "reddit:abc"          # bound field preserved
+    assert rec["stage"] == "from-extra"             # caller's extra wins
+
+
+def test_std_attrs_covers_runtime_logrecord_keys() -> None:
+    """If Python adds a new LogRecord attribute, _STD_ATTRS must already cover it
+    so we don't silently leak it as an "extra"."""
+    from src.core.logging import _STD_ATTRS
+    runtime = set(logging.makeLogRecord({}).__dict__)
+    missing = runtime - _STD_ATTRS
+    assert not missing, f"_STD_ATTRS missing runtime keys: {missing}"

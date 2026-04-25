@@ -43,7 +43,6 @@ def _root(
 
 
 def _setup_logging() -> None:
-    import os
     from src.core.logging import setup
     setup(level=os.getenv("GAMEEE_LOG_LEVEL", "INFO"))
 

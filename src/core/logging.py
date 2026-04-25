@@ -8,16 +8,16 @@ from datetime import datetime, timezone
 from typing import Any
 
 # Standard LogRecord attributes we don't want to leak into the JSON output as
-# "extras". Anything not in this set goes into the record verbatim.
-_STD_ATTRS = {
-    "name", "msg", "args", "levelname", "levelno", "pathname", "filename",
-    "module", "exc_info", "exc_text", "stack_info", "lineno", "funcName",
-    "created", "msecs", "relativeCreated", "thread", "threadName",
-    "processName", "process", "message", "asctime", "taskName",
-}
+# "extras". Derived from a fresh LogRecord plus the names that get added later
+# during formatting (`message` from getMessage(), `asctime` from formatTime()).
+# This is forward-compatible: new fields the stdlib adds to LogRecord are
+# automatically excluded from extras.
+_STD_ATTRS = set(logging.makeLogRecord({}).__dict__) | {"message", "asctime", "taskName"}
 
 
 class JsonFormatter(logging.Formatter):
+    """Format a LogRecord as one-line JSON; non-standard attributes become top-level fields."""
+
     def format(self, record: logging.LogRecord) -> str:
         out: dict[str, Any] = {
             "ts": datetime.fromtimestamp(record.created, tz=timezone.utc)
@@ -52,6 +52,7 @@ class _BoundAdapter(logging.LoggerAdapter):
     """LoggerAdapter that merges bound fields with per-call kwargs."""
 
     def process(self, msg: str, kwargs: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        # Snapshot keys before popping — we mutate kwargs while iterating.
         extra = dict(self.extra or {})
         # Per-call kwargs (other than reserved logging args) override bound fields.
         reserved = {"exc_info", "stack_info", "stacklevel", "extra"}
@@ -59,10 +60,15 @@ class _BoundAdapter(logging.LoggerAdapter):
             if key in reserved:
                 continue
             extra[key] = kwargs.pop(key)
+        # Also honour the standard stdlib idiom: caller may pass extra={...}.
+        # That dict wins over bound fields too.
+        caller_extra = kwargs.get("extra")
+        if isinstance(caller_extra, dict):
+            extra.update(caller_extra)
         kwargs["extra"] = extra
         return msg, kwargs
 
 
 def bind_log(logger: logging.Logger | None = None, **fields: Any) -> _BoundAdapter:
     """Return a LoggerAdapter that injects `fields` into every record."""
-    return _BoundAdapter(logger or logging.getLogger(), fields)
+    return _BoundAdapter(logger if logger is not None else logging.getLogger(), fields)
