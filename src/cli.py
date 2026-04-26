@@ -146,13 +146,15 @@ def run(
                                   help="bypass rights gate for internal rendering only"),
     profile: str = typer.Option("auto", help="short | long | auto"),
     publish: bool = typer.Option(False, help="upload long video to YouTube"),
+    from_stage: str | None = typer.Option(None, "--from", help="resume from this stage"),
+    to_stage: str | None = typer.Option(None, "--to", help="stop after this stage"),
+    force: list[str] = typer.Option([], "--force", help="clear cache for these stages (repeatable)"),
 ) -> None:
-    """Render one story end-to-end. Default: pick top cleared story."""
+    """Render one story end-to-end via the stage runner."""
     _setup_logging()
     if story_id:
         row = get_story(story_id)
     else:
-        # pick highest-scoring story that's either cleared or in research mode
         candidates = top_unused(limit=50)
         row = None
         for c in candidates:
@@ -167,13 +169,42 @@ def run(
     opts = RunOptions(
         research_mode=research,
         publish_youtube=publish,
-        profile={"short": LengthProfile.SHORT, "long": LengthProfile.LONG}.get(profile, LengthProfile.SHORT),
+        profile={"short": LengthProfile.SHORT, "long": LengthProfile.LONG}.get(
+            profile, LengthProfile.SHORT
+        ),
     )
-    artifacts = process_one(story, opts)
-    if artifacts is None:
-        console.print("[red]pipeline returned no artifacts[/red]")
+
+    from datetime import datetime, timezone
+    from src.core.config import runs_dir
+    from src.core.context import Context
+    from src.core.storage import start_run
+    from src.pipeline import runner
+    from src.pipeline.stages.legacy import LegacyMonolithStage
+
+    run_dir = (runs_dir() / datetime.now(timezone.utc).strftime("%Y-%m-%d")
+               / story.id.replace(":", "_"))
+    run_dir.mkdir(parents=True, exist_ok=True)
+    run_id = start_run(story.id, run_dir)
+    ctx = Context(run_id=run_id, story_id=story.id, brand=os.getenv("GAMEEE_BRAND", "default"),
+                  run_dir=run_dir, story=story, opts=opts)
+
+    # Sprint 1: only the legacy wrapper stage is registered.
+    if not runner.STAGES:
+        runner.STAGES = [LegacyMonolithStage()]
+
+    try:
+        out = runner.run(ctx, from_stage=from_stage, to_stage=to_stage,
+                         force=set(force))
+    except Exception as exc:
+        console.print(f"[red]pipeline failed: {exc}[/red]")
         raise typer.Exit(code=1)
-    console.print(artifacts.model_dump_json(indent=2))
+
+    console.print({
+        "story_id": out.story_id,
+        "long_video": str(out.long_video) if out.long_video else None,
+        "shorts": [str(p) for p in out.shorts],
+        "thumbnail_variants": [str(p) for p in out.thumbnail_variants],
+    })
 
 
 @app.command()
