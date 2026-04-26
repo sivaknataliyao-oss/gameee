@@ -11,6 +11,7 @@ Cadence defaults (override in config/channel.yaml -> schedule):
 from __future__ import annotations
 
 import logging
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -37,8 +38,12 @@ class ScheduledPostRow(SQLModel, table=True):
     error: str | None = None
 
 
+_ensure_table_lock = threading.Lock()
+
+
 def _ensure_table() -> None:
-    SQLModel.metadata.create_all(engine())
+    with _ensure_table_lock:
+        SQLModel.metadata.create_all(engine(), checkfirst=True)
 
 
 @dataclass
@@ -61,14 +66,19 @@ def cadence_from_config() -> Cadence:
     )
 
 
-def _next_slot(platform: str, cadence: Cadence) -> datetime:
-    """Next slot after the latest planned post on that platform."""
-    _ensure_table()
-    with Session(engine()) as s:
-        q = select(ScheduledPostRow).where(ScheduledPostRow.platform == platform).order_by(
-            ScheduledPostRow.planned_for.desc()
-        ).limit(1)
-        last = s.exec(q).first()
+def _next_slot(platform: str, cadence: Cadence, sess: Session) -> datetime:
+    """Next slot after the latest planned post on that platform.
+
+    `sess` must already be inside a write transaction (BEGIN IMMEDIATE) so the
+    read-then-insert is atomic across concurrent callers.
+    """
+    q = (
+        select(ScheduledPostRow)
+        .where(ScheduledPostRow.platform == platform)
+        .order_by(ScheduledPostRow.planned_for.desc())
+        .limit(1)
+    )
+    last = sess.exec(q).first()
 
     now = datetime.now(timezone.utc)
     if platform == "youtube":
@@ -80,33 +90,46 @@ def _next_slot(platform: str, cadence: Cadence) -> datetime:
     else:
         delta = timedelta(hours=cadence.instagram_hours)
 
-    base = (last.planned_for if last else now)
-    if base < now:
+    if last:
+        # SQLite returns naive datetimes; re-attach UTC so comparisons work.
+        lp = last.planned_for
+        base = lp.replace(tzinfo=timezone.utc) if lp.tzinfo is None else lp
+    else:
         base = now
-    slot = base + delta
-    slot = slot.replace(hour=cadence.preferred_hour_utc, minute=0, second=0, microsecond=0)
-    if slot < now:
-        slot += timedelta(days=1)
-    return slot
+    candidate = max(now, base + delta)
+    candidate = candidate.replace(
+        hour=cadence.preferred_hour_utc, minute=0, second=0, microsecond=0
+    )
+    if candidate < now:
+        candidate = candidate + timedelta(days=1)
+    return candidate
 
 
 def enqueue(story_id: str, platform: str, video_path: Path, title: str,
             description: str, hashtags: list[str]) -> ScheduledPostRow:
+    """Plan a post in a slot that won't collide with concurrent enqueues."""
     import json as _json
+    from sqlalchemy import text as _text
     _ensure_table()
-    slot = _next_slot(platform, cadence_from_config())
-    row = ScheduledPostRow(
-        story_id=story_id,
-        platform=platform,
-        video_path=str(video_path),
-        title=title,
-        description=description,
-        hashtags_json=_json.dumps(hashtags, ensure_ascii=False),
-        planned_for=slot,
-    )
-    with session() as s:
+    cadence = cadence_from_config()
+    with Session(engine()) as s:
+        s.connection().execute(_text("BEGIN IMMEDIATE"))
+        slot = _next_slot(platform, cadence, s)
+        row = ScheduledPostRow(
+            story_id=story_id,
+            platform=platform,
+            video_path=str(video_path),
+            title=title,
+            description=description,
+            hashtags_json=_json.dumps(hashtags, ensure_ascii=False),
+            planned_for=slot,
+        )
         s.add(row)
-        s.flush()
+        s.commit()
+        s.refresh(row)
+        # SQLite strips tzinfo; re-attach UTC so callers get an aware datetime.
+        if row.planned_for.tzinfo is None:
+            row.planned_for = row.planned_for.replace(tzinfo=timezone.utc)
     log.info("enqueued %s for %s at %s", platform, story_id, slot.isoformat())
     return row
 
