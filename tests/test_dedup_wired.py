@@ -32,9 +32,10 @@ def test_accept_rejects_near_duplicates(monkeypatch):
     existing_hash = dd.simhash(original)
 
     # Pretend the DB already has a story with near-identical simhash
-    monkeypatch.setattr(fp, "recent_simhashes", lambda since_days=60: [
-        ("reddit:first", existing_hash),
-    ])
+    import src.filters.dedup as _dd
+    monkeypatch.setattr("src.core.storage.has_near_duplicate",
+                        lambda our_hash, threshold=4, since_days=60, batch=500:
+                            "reddit:first" if _dd.hamming(our_hash, existing_hash) <= threshold else None)
     # Loosen the length gate so our fake story isn't rejected earlier
     from src.core import config
     monkeypatch.setitem(config.filters().get("length", {}), "min_chars", 0)
@@ -45,15 +46,13 @@ def test_accept_rejects_near_duplicates(monkeypatch):
 
 
 def test_accept_allows_unrelated_story(monkeypatch):
-    import src.filters.dedup as dd
     import src.filters.pipeline as fp
 
     a = "Зимой мы ходили в походы и варили чай на костре. " * 20
     b = "Главный герой нашёл ключ от старой библиотеки на чердаке. " * 20
 
-    monkeypatch.setattr(fp, "recent_simhashes", lambda since_days=60: [
-        ("reddit:prev", dd.simhash(a)),
-    ])
+    monkeypatch.setattr("src.core.storage.has_near_duplicate",
+                        lambda our_hash, threshold=4, since_days=60, batch=500: None)
     from src.core import config
     monkeypatch.setitem(config.filters().get("length", {}), "min_chars", 0)
 

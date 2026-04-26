@@ -5,8 +5,10 @@ import json
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Iterator
 
+from sqlalchemy import BigInteger
+from sqlalchemy.types import TypeDecorator
 from sqlmodel import Field, Session, SQLModel, create_engine, select
 
 from src.core.config import db_path
@@ -15,6 +17,31 @@ from src.core.models import RightsStatus, Source
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+class UInt64(TypeDecorator):
+    """Store unsigned 64-bit integers in SQLite as signed int64 (two's complement)."""
+
+    impl = BigInteger
+    cache_ok = True
+
+    _MASK = 0xFFFF_FFFF_FFFF_FFFF
+    _SIGN = 0x8000_0000_0000_0000
+
+    def process_bind_param(self, value: Any, dialect: Any) -> int | None:
+        if value is None:
+            return None
+        v = int(value) & self._MASK
+        # Convert to signed int64 for storage
+        if v >= self._SIGN:
+            v -= (self._MASK + 1)
+        return v
+
+    def process_result_value(self, value: Any, dialect: Any) -> int | None:
+        if value is None:
+            return None
+        # Convert back to unsigned
+        return int(value) & self._MASK
 
 
 class StoryRow(SQLModel, table=True):
@@ -32,7 +59,7 @@ class StoryRow(SQLModel, table=True):
     metrics_json: str = "{}"
     growth_score: float = 0.0
     long_form_potential: float = 0.0
-    simhash: int | None = None    # 64-bit fingerprint for dedup; None = not computed
+    simhash: int | None = Field(default=None, index=True, sa_type=UInt64)
     used: bool = False            # marked after successful publish
     blocked_reason: str | None = None
 
@@ -77,6 +104,13 @@ def engine():
         p.parent.mkdir(parents=True, exist_ok=True)
         _engine = create_engine(f"sqlite:///{p}", echo=False)
         SQLModel.metadata.create_all(_engine)
+        from sqlalchemy import text
+        with _engine.connect() as conn:
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_storyrow_simhash "
+                "ON storyrow (simhash)"
+            ))
+            conn.commit()
     return _engine
 
 
@@ -188,3 +222,42 @@ def add_upload(story_id: str, platform: str, status: str = "pending",
 
 def metrics_to_json(m: dict) -> str:
     return json.dumps(m, ensure_ascii=False, default=str)
+
+
+def has_near_duplicate(
+    our_hash: int,
+    *,
+    threshold: int = 4,
+    since_days: int = 60,
+    batch: int = 500,
+) -> str | None:
+    """Return the id of a stored story whose simhash is within `threshold`
+    Hamming distance of `our_hash`, scanning the last `since_days` days in
+    pages of `batch` rows. Short-circuits on first match, so the average
+    case is O(K) where K is the page containing the duplicate.
+    """
+    from datetime import timedelta
+    from src.filters.dedup import hamming
+    cutoff = datetime.now(timezone.utc) - timedelta(days=since_days)
+    offset = 0
+    while True:
+        with session() as s:
+            q = (
+                select(StoryRow.id, StoryRow.simhash)
+                .where(
+                    StoryRow.simhash.is_not(None),
+                    StoryRow.fetched_at >= cutoff,
+                )
+                .order_by(StoryRow.fetched_at.desc())
+                .offset(offset)
+                .limit(batch)
+            )
+            rows = list(s.exec(q))
+        if not rows:
+            return None
+        for sid, h in rows:
+            if h is None:
+                continue
+            if hamming(our_hash, int(h)) <= threshold:
+                return sid
+        offset += batch

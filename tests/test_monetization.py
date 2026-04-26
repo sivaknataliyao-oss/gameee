@@ -34,7 +34,8 @@ def test_filter_blocks_when_verdict_not_friendly(monkeypatch):
     from src.filters.monetization import Verdict
 
     # No dup history
-    monkeypatch.setattr(fp, "recent_simhashes", lambda since_days=60: [])
+    monkeypatch.setattr("src.core.storage.has_near_duplicate",
+                        lambda our_hash, threshold=4, since_days=60, batch=500: None)
     # Fake the classifier to return an "unsafe" verdict
     monkeypatch.setattr(fp.monetization, "classify", lambda text, title="": Verdict(
         friendly=False, risk_category="violence", confidence=0.95,
@@ -54,7 +55,8 @@ def test_filter_allows_low_confidence(monkeypatch):
     import src.filters.pipeline as fp
     from src.filters.monetization import Verdict
 
-    monkeypatch.setattr(fp, "recent_simhashes", lambda since_days=60: [])
+    monkeypatch.setattr("src.core.storage.has_near_duplicate",
+                        lambda our_hash, threshold=4, since_days=60, batch=500: None)
     monkeypatch.setattr(fp.monetization, "classify", lambda text, title="": Verdict(
         friendly=False, risk_category="tragedy", confidence=0.3,
         explanation="maybe",
