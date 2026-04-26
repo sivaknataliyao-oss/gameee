@@ -40,6 +40,12 @@ def _root(
     if brand:
         from src.core.config import set_active_brand
         set_active_brand(brand)
+    from src.core.configs import AppConfig, ConfigError
+    try:
+        AppConfig.load(brand)
+    except ConfigError as exc:
+        console.print(f"[red]config error[/red]\n{exc}")
+        raise typer.Exit(code=2)
 
 
 def _setup_logging() -> None:
